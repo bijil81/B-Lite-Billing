@@ -1,0 +1,2090 @@
+# V6 Migration Ledger
+
+## 2026-04-28 - Workspace Created
+- Created V6 workspace as a sibling of the stable V5.6 folder.
+- Added engineering rules and master prompt.
+- V5.6 source remains untouched.
+
+## First Planned Migration Batch
+- Copy `billing.py` because it is the largest file and contains billing UI, calculation, save, print, PDF, WhatsApp, and state reset responsibilities.
+- Copy `billing_logic.py` because it already contains extracted save logic and can guide further separation.
+- Copy focused billing tests where useful.
+- First split target: totals calculation from `BillingFrame._calc_totals`.
+
+## Quality Gate
+- Exact-copy comparison must pass before editing copied files.
+- Extracted totals behavior must be covered by focused tests.
+- Any intentional behavior difference must be documented here before continuing.
+
+## 2026-04-28 - Billing Totals Split Started
+- Exact-copy SHA256 comparison passed for:
+  - `billing.py`
+  - `billing_logic.py`
+  - `tests/test_billing_logic.py`
+- Created `src/blite_v6/billing/totals.py`.
+- Updated copied V6 `billing.py` so `_calc_totals` delegates billing math to the new pure module.
+- Preserved UI side effects in `_calc_totals`: points label update and points checkbox reset.
+- Added focused totals tests and legacy-formula comparison tests.
+- Verification:
+  - AST parse passed for edited billing/totals/test files.
+  - `python -m pytest -p no:cacheprovider tests\test_billing_totals.py tests\test_billing_totals_legacy_compare.py -q`
+  - Result: 11 passed.
+- No cache or bytecode files were left in the V6 workspace.
+- V5.6 git status remained clean.
+
+## Next Recommended Batch
+- Copy only the minimum dependencies needed to run `tests/test_billing_logic.py` inside V6.
+- Then continue splitting billing save/report responsibilities from `billing.py` and `billing_logic.py`.
+
+## 2026-04-28 - Billing Save/Report Split
+- Copied only adapter API files needed by billing persistence:
+  - `adapters/billing_adapter.py`
+  - `adapters/customer_adapter.py`
+  - `adapters/__init__.py`
+- SHA256 comparison passed for copied adapter files.
+- Initial `tests/test_billing_logic.py` run failed because copied adapters imported `salon_settings` at import time.
+- Fixed the dependency risk by keeping adapter calls lazy in `billing_logic.py`.
+- Created `src/blite_v6/billing/report_persistence.py` for save/report core responsibilities:
+  - legacy CSV item formatting
+  - invoice payload building
+  - CSV mirror writing
+  - V5 save orchestration with injected dependencies
+- Preserved existing `billing_logic.py` public API and monkeypatch surface:
+  - `F_REPORT`
+  - `app_log`
+  - `now_str`
+  - `finalize_invoice_v5`
+  - `use_v5_customers_db`
+  - `_mirror_invoice_to_csv`
+  - `save_report_v5`
+- Verification:
+  - AST parse passed for `billing_logic.py`, `report_persistence.py`, and `tests/test_billing_logic.py`.
+  - `python -m pytest -p no:cacheprovider tests\test_billing_logic.py -q`
+  - Result: 3 passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 14 passed.
+  - No cache or bytecode files were left in the V6 workspace.
+
+## Next Recommended Batch
+- Copy the minimum settings/service dependencies needed to exercise real adapter-backed save flow.
+- Add tests around failed `finalize_invoice_v5` so invoices are not marked saved after a failed DB write.
+- Then continue reducing `billing.py` by moving PDF/print/WhatsApp side effects behind small services.
+
+## 2026-04-28 - Billing.py Split Blueprint
+- Created `docs/BILLING_PY_SPLIT_MASTER_BLUEPRINT.md`.
+- Created `docs/BILLING_PY_SPLIT_PHASE_TRACKER.md`.
+- Calculated 12 safe phases for splitting `billing.py`.
+- Current completed phases:
+  - Phase 0: baseline, rules, tracking
+  - Phase 1: billing totals domain
+  - Phase 2: save/report persistence core
+- Next phase selected:
+  - Phase 3: customer context
+- Rule confirmed:
+  - Do not split `_build` first because it is 648 lines and tightly coupled to all widget attributes.
+  - Extract tested non-UI behavior before UI layout decomposition.
+
+## 2026-04-28 - Phase 3 Started
+- Started Phase 3: customer context split.
+- Read customer save, customer suggestion, phone lookup, membership, and birthday-offer methods in `billing.py`.
+- Created `docs/PHASE3_CUSTOMER_CONTEXT_PLAN.md`.
+- First Phase 3 implementation target:
+  - extract pure non-UI customer rules and suggestion matching helpers.
+- UI popup rendering remains in `billing.py` until helper behavior is tested.
+
+## 2026-04-28 - Phase 3A Complete
+- Created `src/blite_v6/billing/customer_context.py`.
+- Created `tests/test_billing_customer_context.py`.
+- Updated copied V6 `billing.py` to use pure customer helpers for:
+  - auto-save eligibility
+  - V5 customer payload building
+  - phone lookup state
+  - membership info formatting
+  - birthday-month detection
+- Preserved Tkinter UI updates in `billing.py`.
+- Verification:
+  - AST parse passed for `billing.py`, `customer_context.py`, and customer context tests.
+  - `python -m pytest -p no:cacheprovider tests\test_billing_customer_context.py tests\test_billing_totals.py tests\test_billing_totals_legacy_compare.py tests\test_billing_logic.py -q`
+  - Result: 25 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Next:
+  - Phase 3B: extract customer suggestion matching and suggestion label formatting.
+
+## 2026-04-28 - Phase 3B Complete
+- Created `src/blite_v6/billing/customer_suggestions.py`.
+- Created `tests/test_billing_customer_suggestions.py`.
+- Updated copied V6 `billing.py` to use pure suggestion helpers for:
+  - customer suggestion matching by name and phone
+  - popup row label formatting
+  - suggestion index clamping
+- Preserved popup UI rendering and selection behavior in `billing.py`.
+- Reduced repeated customer loading in `_build_suggestion_popup` by reusing the customer snapshot from `_show_suggestions`.
+- Verification:
+  - AST parse passed for `billing.py`, `customer_suggestions.py`, and suggestion tests.
+  - `python -m pytest -p no:cacheprovider tests\test_billing_customer_context.py tests\test_billing_customer_suggestions.py tests\test_billing_totals.py tests\test_billing_totals_legacy_compare.py tests\test_billing_logic.py -q`
+  - Result: 30 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Next:
+  - Phase 3C: review remaining customer-context wrappers and decide whether Phase 3 can close or needs a small UI smoke shim.
+
+## 2026-04-28 - Phase 3C Complete
+- Confirmed active work folder:
+  - `G:\chimmu\Bobys_Salon Billing\B-Lite management_Billing_V6.0`
+- Reviewed remaining customer wrapper methods in copied V6 `billing.py`.
+- Added `tests/test_billing_customer_ui_smoke.py`.
+- Tiny UI smoke shim decision:
+  - Added a static wrapper smoke test instead of launching Tkinter.
+  - Reason: live UI smoke would require more app dependencies to be copied into V6, while the Phase 3 goal is customer logic split safety.
+  - Benefit: catches broken helper wiring and repeated customer loading regressions without pulling the full app dependency chain.
+- Phase 3 customer-context split is complete.
+- Verification:
+  - AST parse passed for `billing.py` and `tests/test_billing_customer_ui_smoke.py`.
+  - `python -m pytest -p no:cacheprovider tests\test_billing_customer_context.py tests\test_billing_customer_suggestions.py tests\test_billing_customer_ui_smoke.py tests\test_billing_totals.py tests\test_billing_totals_legacy_compare.py tests\test_billing_logic.py -q`
+  - Result: 32 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Important scope note:
+  - This does not mean all of `billing.py` is fully split.
+  - It means the customer-context section of `billing.py` is safely split.
+  - Full `billing.py` split continues with Phase 4: catalog search and barcode.
+
+## 2026-04-28 - Phase 4 Complete
+- Started and completed Phase 4: catalog search and barcode split.
+- Created `src/blite_v6/billing/catalog_search.py`.
+- Created `src/blite_v6/billing/barcode_lookup.py`.
+- Created tests:
+  - `tests/test_billing_catalog_search.py`
+  - `tests/test_billing_barcode_lookup.py`
+  - `tests/test_billing_catalog_barcode_ui_smoke.py`
+- Updated copied V6 `billing.py` to delegate:
+  - mode data selection
+  - variant product flag check
+  - category value building
+  - category match building
+  - smart/fuzzy search ranking
+  - exact search match
+  - search result label formatting
+  - selected variant metadata preservation
+  - barcode variant lookup normalization
+  - barcode legacy inventory lookup normalization
+  - scanned product add/increment/out-of-stock handling
+- Preserved Tkinter search dropdown rendering in `billing.py`.
+- Preserved barcode label updates, scan field reset, and bill refresh in `billing.py`.
+- Verification:
+  - AST parse passed for edited Phase 4 files.
+  - Initial focused current V6 tests after helper wiring: 45 passed.
+- Final Phase 4 verification:
+  - AST parse passed for `tests/test_billing_catalog_barcode_ui_smoke.py`.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 47 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Next:
+  - Phase 5 target: cart operations.
+
+## 2026-04-28 - Phase 5 Complete
+- Started and completed Phase 5: cart operations split.
+- Created `src/blite_v6/billing/cart_operations.py`.
+- Created tests:
+  - `tests/test_billing_cart_operations.py`
+  - `tests/test_billing_cart_ui_smoke.py`
+- Updated copied V6 `billing.py` to delegate:
+  - cart quantity parsing
+  - inventory cache refresh decision
+  - variant stock validation
+  - cart item add/merge behavior
+  - item quantity update
+  - item price update
+  - item removal
+  - undo last item behavior
+- Preserved Tkinter edit dialog, message boxes, focus behavior, and bill refresh calls in `billing.py`.
+- Verification:
+  - AST parse passed for edited Phase 5 files.
+  - Initial focused current V6 tests after helper wiring: 55 passed.
+- Final Phase 5 verification:
+  - AST parse passed for `tests/test_billing_cart_ui_smoke.py`.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 56 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Next:
+  - Phase 6 target: offers, coupons, redeem, discount state.
+
+## 2026-04-28 - Phase 6 Complete
+- Started and completed Phase 6: offers, coupons, redeem, discount state split.
+- Created `src/blite_v6/billing/discounts.py`.
+- Created tests:
+  - `tests/test_billing_discounts.py`
+  - `tests/test_billing_discounts_ui_smoke.py`
+- Updated copied V6 `billing.py` to delegate:
+  - manual discount toggle state
+  - offer dropdown option formatting
+  - selected offer state
+  - coupon code normalization
+  - coupon apply success/invalid state
+  - clear offer state
+  - redeem apply success/invalid state
+  - redeem clear info visibility
+- Preserved message boxes, entry/combobox mutation, and bill refresh calls in `billing.py`.
+- Verification:
+  - AST parse passed for edited Phase 6 files.
+  - Initial focused current V6 tests after helper wiring: 63 passed.
+- Final Phase 6 verification:
+  - AST parse passed for `tests/test_billing_discounts_ui_smoke.py`.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 64 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Next:
+  - Phase 7 target: bill preview and BillData builder.
+
+## 2026-04-28 - Phase 7 Complete
+- Started and completed Phase 7: bill preview and BillData builder split.
+- Created `src/blite_v6/billing/bill_document.py`.
+- Created tests:
+  - `tests/test_billing_bill_document.py`
+  - `tests/test_billing_bill_document_ui_smoke.py`
+- Updated copied V6 `billing.py` to delegate:
+  - service/product item splitting
+  - print width resolution
+  - print settings width application
+  - invoice branding fallback
+  - shared `BillData` kwargs building for preview and PDF
+  - PDF path construction
+- Preserved `print_engine` imports/calls, text widget updates, total label updates, and `BillData` object creation in `billing.py`.
+- Verification:
+  - AST parse passed for edited Phase 7 files.
+  - Initial focused current V6 tests after helper wiring: 69 passed.
+- Final Phase 7 verification:
+  - AST parse passed for `tests/test_billing_bill_document_ui_smoke.py`.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 71 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Next:
+  - Phase 8 target: PDF, print, WhatsApp side effects.
+
+## 2026-04-28 - Phase 8 Complete
+- Started and completed Phase 8: PDF, print, WhatsApp side-effect split.
+- Created helper modules:
+  - `src/blite_v6/billing/billing_actions.py`
+  - `src/blite_v6/billing/whatsapp_actions.py`
+- Created tests:
+  - `tests/test_billing_actions.py`
+  - `tests/test_billing_whatsapp_actions.py`
+  - `tests/test_billing_actions_ui_smoke.py`
+- Updated copied V6 `billing.py` to delegate:
+  - bill-empty action guard
+  - save-report argument mapping from totals
+  - manual save, PDF save, print, and WhatsApp dialog text
+  - auto-clear-after-print setting decision
+  - WhatsApp status button view mapping
+  - WhatsApp session result mapping
+  - WhatsApp send error extraction
+- Preserved the side effects in `billing.py`:
+  - PDF generation and cross-platform file open
+  - Windows printer access
+  - WhatsApp send/session calls
+  - Tkinter message boxes, button updates, and thread scheduling
+- Verification:
+  - AST parse passed for edited Phase 8 files.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 81 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Next:
+  - Phase 9 target: UI build decomposition.
+
+## 2026-04-28 - Phase 9 Complete
+- Started and completed Phase 9: UI build decomposition.
+- Created helper modules:
+  - `src/blite_v6/billing/ui_sections.py`
+  - `src/blite_v6/billing/ui_bindings.py`
+- Created tests:
+  - `tests/test_billing_ui_sections.py`
+  - `tests/test_billing_ui_build_smoke.py`
+- Updated copied V6 `billing.py` to delegate:
+  - billing mode resolution
+  - bill preview font and responsive left-panel width calculation
+  - combobox style setup
+  - scrollable left panel and intro/card section shells
+  - customer/search/barcode/quantity/discount/preview widget bindings
+  - finish action button specs
+  - preview font resize and paned split sync
+- Preserved `BillingFrame._build` as the coordinator and kept existing widget attribute names on `BillingFrame`.
+- Verification:
+  - AST parse passed for edited Phase 9 files.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 87 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Next:
+  - Phase 10 target: shortcuts, context menu, fast mode, reload.
+
+## 2026-04-28 - Phase 10 Complete
+- Started and completed Phase 10: shortcuts, context menu, fast mode, reload.
+- Created helper module:
+  - `src/blite_v6/billing/ui_actions.py`
+- Created tests:
+  - `tests/test_billing_ui_actions.py`
+  - `tests/test_billing_ui_actions_smoke.py`
+- Updated copied V6 `billing.py` to delegate:
+  - context menu visibility and extra payload decisions
+  - context action and clipboard specs
+  - shortcut binding specs
+  - fast-mode next state and button view
+  - billing tab refresh action sequence
+  - booking prefill normalization and confirmation copy
+  - reload reset state
+- Preserved side effects in `billing.py`:
+  - Tk root and bind-all shortcut registration
+  - widget Return key binding
+  - context menu imports, action registration, clipboard copy, rendering, and popup display
+  - product catalog refresh and widget mutation during reload
+- Verification:
+  - AST parse passed for edited Phase 10 files.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 94 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Next:
+  - Phase 11 target: final integration and shrink `BillingFrame`.
+
+## 2026-04-28 - Phase 11 Complete
+- Started and completed Phase 11: final integration and shrink `BillingFrame`.
+- Extended existing persistence module:
+  - `src/blite_v6/billing/report_persistence.py`
+- Created tests:
+  - `tests/test_billing_report_persistence_legacy.py`
+  - `tests/test_billing_final_integration_smoke.py`
+- Created final report:
+  - `docs/PHASE11_FINAL_INTEGRATION_REPORT.md`
+- Updated copied V6 `billing.py` to delegate non-V5 `_save_report` behavior into `save_report_legacy_core`.
+- Preserved:
+  - V5 billing DB branch through `_save_report_v5`
+  - duplicate invoice guard behavior
+  - inventory deduction
+  - customer auto-save
+  - visit recording
+  - loyalty point redemption
+  - redeem-code apply
+  - cloud sync
+  - app bill-saved callback
+- Verification:
+  - AST parse passed for edited Phase 11 files.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 99 passed.
+  - No cache or bytecode files were left in V6.
+  - V5.6 git status remained clean.
+- Final:
+  - Billing split phases 0-11 are complete.
+  - Next recommended gate is live V6 app/manual billing smoke.
+
+## 2026-04-28 - Main.py Split Blueprint Created
+- Decision:
+  - Manual billing smoke should wait until V6 startup/main app integration is ready.
+  - `main.py` should be copied, audited, dependency-gated, and split before the combined live smoke.
+- Completed:
+  - Copied V5.6 `main.py` into V6.
+  - Copied untouched `main.py` reference into `legacy_reference`.
+  - Verified V5.6 source, V6 working copy, and V6 reference copy match by hash.
+  - Verified `main.py` parses with Python AST.
+  - Audited top-level imports and identified first-order missing local dependencies.
+  - Audited largest `SalonApp` responsibilities and method sizes.
+  - Created `docs\MAIN_PY_SPLIT_MASTER_BLUEPRINT.md`.
+- Main split plan:
+  - 9 safe phases, Phase 0 through Phase 8.
+  - Phase 0 remains the active gate: copy only startup/import dependencies needed to make V6 `main.py` runnable enough for import/startup smoke.
+- Guardrails:
+  - V5.6 remains untouched.
+  - Existing V6 `billing.py` must not be overwritten by V5.6 during app dependency copy.
+
+## 2026-04-28 - Main.py Phase 0 Dependency Gate Complete
+- Completed:
+  - Copied first-order startup/import dependencies required by V6 `main.py`.
+  - Copied second-order dependencies discovered by import smoke.
+  - Copied lazy navigation page modules needed for future manual app smoke.
+  - Copied supporting service/repository/validator layers needed by the V6 billing import path.
+- Important protection:
+  - Did not overwrite the already-split V6 `billing.py`.
+  - Added only `adapters\product_catalog_adapter.py` to support the existing V6 billing imports.
+- Verification:
+  - `main.py` syntax compile passed.
+  - `import main` smoke passed.
+  - Navigation module import smoke passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 99 passed.
+  - Removed generated `__pycache__` folders after verification.
+  - V5.6 git status remained clean.
+- Next:
+  - Phase 1 target: extract app specs and policy constants only.
+
+## 2026-04-28 - Main.py Phase 1 Complete
+- Started and completed Phase 1: app specs and policy extraction.
+- Created helper package:
+  - `src\blite_v6\app\__init__.py`
+  - `src\blite_v6\app\app_specs.py`
+- Created tests:
+  - `tests\test_main_app_specs.py`
+- Updated copied V6 `main.py` to delegate:
+  - navigation role matrix construction
+  - action permission matrix construction
+  - module/page specs
+  - role normalization
+  - navigation access decision
+  - action permission decision
+  - first allowed navigation key decision
+- Preserved in `main.py`:
+  - `SalonApp` wrapper methods
+  - message boxes
+  - widget mutation
+  - lazy frame creation
+  - startup/login orchestration
+  - all GUI build behavior
+- Verification:
+  - `main.py` syntax compile passed.
+  - `tests\test_main_app_specs.py`
+  - Result: 5 passed.
+  - `import main` smoke passed.
+  - Navigation module import smoke passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 104 passed.
+  - `main.py` reduced from 1,698 lines to 1,649 lines.
+  - V5.6 source remained untouched.
+- Next:
+  - Phase 2 target: startup runtime utilities.
+
+## 2026-04-28 - Main.py Phase 2 Complete
+- Started and completed Phase 2: startup runtime utilities.
+- Created helper module:
+  - `src\blite_v6\app\startup_runtime.py`
+- Created tests:
+  - `tests\test_main_startup_runtime.py`
+- Updated copied V6 `main.py` to delegate:
+  - Windows DPI awareness setup
+  - app relaunch command construction
+  - exception logging
+  - fatal startup dialog display
+  - global Tk/sys exception hook installation
+  - startup step logging and failure handling
+- Preserved in `main.py`:
+  - `if __name__ == "__main__"` orchestration
+  - login/startup loop
+  - first-run setup flow
+  - licensing gate call site
+  - all GUI build behavior
+- Safety note:
+  - Relaunch behavior was adapted so the moved helper still targets the real `main.py` entry file, not `startup_runtime.py`.
+- Verification:
+  - `main.py` and `startup_runtime.py` syntax compile passed.
+  - `tests\test_main_startup_runtime.py tests\test_main_app_specs.py`
+  - Result: 10 passed.
+  - `import main` smoke passed.
+  - Navigation module import smoke passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 109 passed.
+  - `main.py` reduced from 1,649 lines to 1,551 lines.
+  - V5.6 source remained untouched.
+- Next:
+  - Phase 3 target: runtime preferences and feature flags.
+
+## 2026-04-28 - Main.py Phase 3 Complete
+- Started and completed Phase 3: runtime preferences and feature flags.
+- Created helper module:
+  - `src\blite_v6\app\runtime_features.py`
+- Created tests:
+  - `tests\test_main_runtime_features.py`
+- Updated copied V6 `main.py` to delegate:
+  - runtime animation fallback view decision
+  - AI config normalization
+  - sidebar feature insertion target decision
+  - AI feature enable/disable update plan
+  - AI-page fallback switch decision
+- Preserved in `main.py`:
+  - direct Tk widget mutation
+  - AI controller creation and mutation
+  - floating AI widget refresh/destroy side effects
+  - frame cache mutation and frame destruction
+  - page switch side effects
+- Verification:
+  - `main.py` and `runtime_features.py` syntax compile passed.
+  - `tests\test_main_runtime_features.py tests\test_main_startup_runtime.py tests\test_main_app_specs.py`
+  - Result: 16 passed.
+  - `import main` smoke passed.
+  - Navigation module import smoke passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 115 passed.
+  - V5.6 source remained untouched.
+- Next:
+  - Phase 4 target: shell build decomposition.
+
+## 2026-04-28 - Main.py Phase 4 Complete
+- Started and completed Phase 4: shell build decomposition.
+- Created helper modules:
+  - `src\blite_v6\app\app_shell.py`
+  - `src\blite_v6\app\shell_sections.py`
+- Created tests:
+  - `tests\test_main_shell_specs.py`
+- Updated copied V6 `main.py` to delegate:
+  - responsive shell metric calculation
+  - sidebar drag min/max bounds
+  - sidebar logo section display specs
+  - user/avatar/role/logout display specs
+- Preserved in `main.py`:
+  - `SalonApp._build` as the coordinator
+  - all Tk widget creation
+  - existing widget attribute names
+  - nav button creation/bindings
+  - topbar button creation side effects
+  - content frame creation
+- Safety note:
+  - Topbar button metadata specs were added and tested, but direct topbar button construction remains in `main.py` for this phase to avoid a broad UI mutation.
+- Verification:
+  - `main.py`, `app_shell.py`, and `shell_sections.py` syntax compile passed.
+  - `tests\test_main_shell_specs.py tests\test_main_runtime_features.py tests\test_main_startup_runtime.py tests\test_main_app_specs.py`
+  - Result: 22 passed.
+  - `import main` smoke passed.
+  - Navigation module import smoke passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 121 passed.
+  - V5.6 source remained untouched.
+- Next:
+  - Phase 5 target: navigation and lazy module loading.
+
+## 2026-04-28 - Main.py Phase 5 Complete
+- Started and completed Phase 5: navigation and lazy module loading.
+- Created helper module:
+  - `src\blite_v6\app\navigation.py`
+- Created tests:
+  - `tests\test_main_navigation.py`
+- Updated copied V6 `main.py` to delegate:
+  - navigation entry lookup and access result
+  - restore-visible-page decision
+  - frame cache hit decision
+  - standard module spec lookup
+  - AI tab initialize/runtime/placeholder decisions
+  - billing-frame attachment decision
+  - frame visibility plan during page switch
+  - nav button active-state plan
+- Preserved in `main.py`:
+  - actual module import execution and error logging
+  - AI controller initialization side effects
+  - AI tab class construction
+  - Tk frame creation and placeholder UI
+  - frame `place`, `place_forget`, and `lift`
+  - nav button and strip mutation
+  - page title/icon mutation
+  - frame refresh and today-total refresh
+- Verification:
+  - `main.py` and `navigation.py` syntax compile passed.
+  - `tests\test_main_navigation.py tests\test_main_shell_specs.py tests\test_main_runtime_features.py tests\test_main_startup_runtime.py tests\test_main_app_specs.py`
+  - Result: 28 passed.
+  - `import main` smoke passed.
+  - Navigation module import smoke passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 127 passed.
+  - V5.6 source remained untouched.
+- Next:
+  - Phase 6 target: startup splash, placeholder, and animation.
+
+## 2026-04-28 - Main.py Phase 6 Complete
+- Started and completed Phase 6: startup splash, placeholder, and animation.
+- Created helper module:
+  - `src\blite_v6\app\startup_ui.py`
+- Created tests:
+  - `tests\test_main_startup_ui.py`
+- Updated copied V6 `main.py` to delegate:
+  - splash minimum duration delay calculation
+  - GIF frame sampling plan
+  - splash static logo sizing
+  - startup placeholder logo sizing
+  - loading text dot sequence
+  - startup logo pulse scale and scaled size
+  - animation timer constants
+  - page title/today reveal duration constants
+- Preserved in `main.py`:
+  - direct Tk `Toplevel`, `Frame`, and `Label` creation
+  - `ImageTk.PhotoImage` ownership
+  - media frame playback side effects
+  - widget existence checks
+  - `after` scheduling calls
+  - startup placeholder destruction during page switch
+- Verification:
+  - `main.py` and `startup_ui.py` syntax compile passed.
+  - `tests\test_main_startup_ui.py tests\test_main_navigation.py tests\test_main_shell_specs.py tests\test_main_runtime_features.py tests\test_main_startup_runtime.py tests\test_main_app_specs.py`
+  - Result: 33 passed.
+  - `import main` smoke passed.
+  - Navigation module import smoke passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 132 passed.
+  - V5.6 source remained untouched.
+- Next:
+  - Phase 7 target: session, events, notifications, and admin.
+
+## 2026-04-28 - Main.py Phase 7 Complete
+- Started and completed Phase 7: session, events, notifications, and admin.
+- Created helper modules:
+  - `src\blite_v6\app\session_security.py`
+  - `src\blite_v6\app\app_events.py`
+- Created tests:
+  - `tests\test_main_session_events.py`
+- Updated copied V6 `main.py` to delegate:
+  - session timeout minute normalization
+  - auto-logout idle decision
+  - root `after` id normalization
+  - notification button label/color view
+  - appointment reminder popup schedule
+  - bill-saved inventory refresh decision
+  - today refresh throttle decision
+  - existing admin panel decision
+  - logout username extraction
+- Preserved in `main.py`:
+  - message boxes
+  - attendance marking side effects
+  - scheduler start/stop calls
+  - root `after` callback scheduling
+  - notification popup creation
+  - appointment popup creation
+  - admin panel construction
+  - root quit/destroy behavior
+- Safety note:
+  - Appointment reminder scheduling now uses enumerate-based staggering, so duplicate appointment objects no longer share the same delay.
+- Verification:
+  - `main.py`, `session_security.py`, and `app_events.py` syntax compile passed.
+  - `tests\test_main_session_events.py tests\test_main_startup_ui.py tests\test_main_navigation.py tests\test_main_shell_specs.py tests\test_main_runtime_features.py tests\test_main_startup_runtime.py tests\test_main_app_specs.py`
+  - Result: 39 passed.
+  - `import main` smoke passed.
+  - Navigation module import smoke passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 138 passed.
+  - V5.6 source remained untouched.
+- Next:
+  - Phase 8 target: final integration and manual smoke gate.
+
+## 2026-04-28 - Main.py Phase 8 Complete
+- Started and completed Phase 8: final integration and manual smoke gate preparation.
+- Created final report:
+  - `docs\PHASE8_MAIN_FINAL_INTEGRATION_REPORT.md`
+- Created final integration test:
+  - `tests\test_main_final_integration_smoke.py`
+- Verified:
+  - `main.py` syntax compile passed.
+  - `billing.py` syntax compile passed.
+  - `tests\test_main_final_integration_smoke.py`
+  - Result: 3 passed.
+  - `import main` smoke passed.
+  - Navigation module import smoke passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 141 passed.
+  - V5.6 source remained untouched.
+- Manual smoke:
+  - Live GUI manual smoke was not run by automation because it requires login/user interaction.
+  - Checklist is prepared in `docs\PHASE8_MAIN_FINAL_INTEGRATION_REPORT.md`.
+- Final:
+  - Main split automated phases 0-8 are complete.
+  - Next gate is live V6 app/manual smoke from `main.py`.
+
+## 2026-04-29 - Manual Smoke Finding 1 Fixed
+- User report:
+  - V6 app opened manually.
+  - Left panel pages opened.
+  - Settings theme workflow appeared to close the app.
+- Log review:
+  - No fatal traceback was found for the Settings theme workflow.
+  - Theme apply uses the existing restart prompt; choosing restart intentionally restarts the app.
+  - Runtime logs showed missing dependencies from copied page modules.
+- Copied missing V5.6 runtime dependencies into V6:
+  - `theme_tab.py`
+  - `salon_info_tab.py`
+  - `print_engine.py`
+  - `print_utils.py`
+  - `adapters\staff_adapter.py`
+  - `adapters\report_adapter.py`
+- Updated final integration smoke test to import these runtime dependencies.
+- Verification:
+  - Runtime dependency import smoke passed.
+  - `python -m pytest -p no:cacheprovider tests -q`
+  - Result: 141 passed.
+- Next manual retry:
+  - Settings theme save with restart prompt set to `No` first.
+  - Then reopen app manually and confirm theme persisted.
+
+## 2026-04-29 - Next Update QA Hardening Started
+- Synced V5.6 QA handoff docs into V6:
+  - `NEXT_UPDATE_QA_BLUEPRINT.md`
+  - `KNOWN_ISSUES.md`
+  - `qa_test_matrix.md`
+- Copied minimum hardening inputs from V5.6 into V6:
+  - `sql\v5_schema.sql`
+  - `sql\v5_indexes.sql`
+  - `sql\v5_views.sql`
+  - `sql\v5_product_variant_schema.sql`
+  - `google_backup.py`
+  - `WhiteLabelApp.spec`
+  - `BUILD.bat`
+- Implemented V6-only production hardening:
+  - backup-first/dry-run existing SQLite CHECK migration helper
+  - product variant non-negative constraints
+  - verify-only client licensing crypto
+  - packaging hygiene tests
+  - Google Drive JSON token persistence with legacy pickle migration
+- Focused verification:
+  - `python -m pytest -p no:cacheprovider tests\test_schema_constraint_migration.py tests\test_licensing_security.py tests\test_packaging_hygiene.py tests\test_google_backup_tokens.py -q`
+  - Result: 10 passed.
+- Release gates still pending:
+  - full V6 pytest suite
+  - manual staging DB migration dry-run/apply
+  - real `dist/` artifact inspection after build
+  - production licensing public key/admin signer setup
+
+## 2026-04-29 - Runtime Dependency and V5.6 QA Fix Port
+- User reported that V6 still missed multiple V5.6 app files, including Settings Security tab dependencies.
+- Copied missing runtime/build-source dependencies from V5.6 into V6 without overwriting split `billing.py` or split `main.py` work:
+  - `security_tab.py`
+  - `advanced_tab.py`
+  - `ai_settings_tab.py`
+  - `animation_engine.py`
+  - `loading_indicator.py`
+  - `print_templates.py`
+  - `ui_components.py`
+  - `ui_pagination.py`
+  - `update_checker.py`
+  - `whatsapp_helper.py`
+  - `worker_pool.py`
+  - runtime JSON templates/assets/build scripts required by app/build smoke
+- Runtime import smoke passed for Settings/security/advanced/print/update/WhatsApp/support modules.
+- Ported V5.6 QA fixes into V6:
+  - copied fixed `redeem_codes.py`
+  - copied fixed `services_v5\billing_service.py`
+  - copied fixed `validators\billing_validator.py`
+  - copied fixed `validators\customer_validator.py`
+  - patched V6 split billing totals to include membership discount in offer/redeem bases
+  - patched V6 split report persistence to persist `redeem_discount` and pass `customer_phone` to redeem apply
+  - patched V6 `billing.py` redeem calculation call to pass current customer phone
+- Added `tests\test_v56_qa_fixes_ported.py`.
+- Verification:
+  - runtime import smoke: passed
+  - `python -m pytest -q`
+  - Result: 157 passed.
+
+## 2026-04-29 - Next Phase Defined: Phase L1 Licensing Gate
+- Updated `NEXT_UPDATE_QA_BLUEPRINT.md` to make licensing a concrete next phase instead of a vague pending risk.
+- Defined Phase L1:
+  - V6 Licensing Admin Signer and Activation Gate.
+- Phase L1 goal:
+  - keep V6 production client verify-only
+  - create external admin-only signer/token generator
+  - keep private keys out of client source, PyInstaller datas, and `dist/`
+  - test activation and trial-extension end-to-end
+- Release decision:
+  - V6 verify-only licensing cannot ship until Phase L1 passes.
+  - If Phase L1 is deferred, licensing crypto cutover must also be deferred for that release.
+- Next recommended implementation phase:
+  - Start Phase L1 before build/EXE release work.
+
+## 2026-04-29 - Billing.py Phase 12 Complete
+- User deferred licensing work until the end and requested the next split step.
+- Returned to the billing split roadmap.
+- Added final billing closure phase:
+  - Phase 12 - Runtime Bridge Extraction and Final Closure.
+- Created:
+  - `src\blite_v6\billing\runtime_services.py`
+  - `tests\test_billing_runtime_services.py`
+- Updated `billing.py` to import compatibility aliases for runtime bridge helpers instead of owning their implementations directly.
+- Preserved public monkeypatch/caller surface:
+  - `_auto_save_customer`
+  - `_billing_get_customers`
+  - `_billing_save_customer`
+  - `_billing_record_visit`
+  - `_billing_redeem_points`
+  - `_billing_entry_fg`
+  - `_billing_card_fg`
+  - `_load_services_products`
+- Updated customer UI smoke tests to account for the new runtime bridge module.
+- Verification:
+  - Focused Phase 12 tests: 18 passed.
+  - `python -m pytest -q`
+  - Result: 160 passed.
+- Result:
+  - `billing.py` reduced to 2,265 lines / 320,187 bytes.
+  - `runtime_services.py` owns 87 lines of extracted bridge logic.
+  - Billing split is now complete through Phase 12.
+- Next split target:
+  - `reports.py` blueprint and phased split.
+
+## 2026-04-29 - Product Billing Add-on: Loose Grocery Quantity Support
+- User requested supermarket/grocery-style product billing without breaking the existing salon/spa flow.
+- Added unit-aware decimal product quantity support in V6 billing:
+  - legacy packet/service quantities still default to `1` and `pcs`
+  - product quantity accepts decimals such as `1.24`
+  - product quantity accepts suffix conversion such as `1240g` for kg-priced items and `500ml` for litre-priced items
+  - cart labels now show loose units as `1.24 kg` / `0.5 L`
+- Updated stock validation and cart merge behavior:
+  - stock checks count decimal quantities
+  - different product variants/units are not merged into the same cart line
+  - undo removes a decimal loose-product line instead of subtracting an invalid whole piece
+- Updated output and stock side effects:
+  - thermal/A4 bill print lines keep decimal quantity labels and correct line totals
+  - PDF bill table keeps decimal quantity labels and correct line totals
+  - legacy inventory deduction now preserves decimal stock balances instead of truncating to integer
+  - inventory grid/save/quick update paths accept decimal stock quantities
+- Added tests:
+  - `tests\test_billing_cart_operations.py`
+  - `tests\test_inventory_loose_quantity.py`
+  - `tests\test_loose_quantity_printing.py`
+- Verification:
+  - focused grocery quantity tests: 14 passed
+  - `python -m pytest -q`
+  - Result: 166 passed.
+- Manual smoke still required:
+  - create/select a kg product, enter `1240g`, confirm subtotal, stock deduction, save, PDF, print preview, and WhatsApp text/PDF payload.
+
+## 2026-04-29 - Loose Quantity Follow-up: Inventory Unit Selection and Manual Startup Unblock
+- User asked whether inventory changes were complete and whether selected product units auto-set in billing.
+- Follow-up findings:
+  - V5 product-variant products already carried `unit_type` into billing.
+  - Legacy services_db/inventory.json products did not yet carry inventory unit metadata into billing selection.
+  - Manual `main.py` startup was not crashing; it was blocked by the unfinished verify-only licensing gate after the V6 licensing cutover.
+- Implemented:
+  - legacy product matches now attach inventory metadata from `inventory.json`:
+    - `unit_type`
+    - `unit_value`
+    - `pack_label`
+    - `bill_label`
+    - `stock_qty`
+  - billing selection now accepts variant metadata when present, even when the full V5 variant DB is not enabled.
+  - source/manual `main.py` smoke now defers licensing enforcement unless `licensing_enforcement_enabled` is true or `BLITE_V6_FORCE_LICENSE=1` is set.
+  - packaged/frozen EXE licensing enforcement remains enabled; this bypass is only for source manual smoke while Phase L1 licensing is deferred.
+- Added tests:
+  - `tests\test_billing_product_unit_metadata.py`
+  - `tests\test_license_gate_deferred.py`
+- Verification:
+  - focused tests: 16 passed
+  - `python -m pytest -q`
+  - Result: 168 passed.
+- Manual startup verification:
+  - `python -u main.py` now logs `source/manual smoke mode: licensing enforcement deferred`
+  - startup proceeds to `login window launch` instead of blocking at activation.
+
+## 2026-04-29 - Phase G0 Complete: Billing Unit Visibility
+- User requested only the billing UI visibility part before returning to splitting work.
+- Added compact unit UI into the existing Price/Qty row:
+  - dynamic `Qty (kg)` / `Qty (L)` / `Qty (pcs)` label
+  - unit badge such as `Unit: kg`
+  - helper text such as `Enter 1.24 or 1240g`
+- Visibility rules:
+  - hidden in Services mode
+  - visible in Products mode
+  - works for both `product_only` and mixed mode when Products is selected
+- Added tested helper:
+  - `quantity_unit_hint_view()` in `src\blite_v6\billing\ui_sections.py`
+- Updated `billing.py` to refresh the hint on:
+  - product selection
+  - mode switch
+  - category change
+  - form reset
+  - full bill clear
+  - service/product reload
+- Added/updated tests:
+  - `tests\test_billing_unit_visibility.py`
+  - `tests\test_billing_ui_build_smoke.py`
+- Verification:
+  - focused tests: 18 passed
+  - `python -m pytest -q`
+  - Result: 171 passed.
+
+## 2026-04-29 - Phase G0 UI Clarity Correction
+- User screenshot showed the Qty typing field was technically present but visually unclear because the unit helper sat between Price and Qty.
+- Adjusted the billing Price/Qty row:
+  - Qty input is now wider and always visible.
+  - Unit badge is attached to the Qty header area.
+  - Helper text sits under the Qty input instead of looking like a separate entry area.
+- Behavior:
+  - The cashier types quantity/weight in the Qty field itself.
+  - The field appears before product selection.
+  - Selecting a product updates the label/helper from generic to `Qty (kg)` / `Qty (pcs)` etc.
+- Verification:
+  - focused tests: 17 passed
+  - `python -m pytest -q`
+  - Result: 171 passed.
+
+## 2026-04-29 - Phase G0 Crash and Alignment Follow-up
+- User screenshot showed an `Unexpected Error` after entering quantity/adding a product.
+- Root cause from `app_debug.log`:
+  - `NameError: name 'time' is not defined`
+  - `billing.py` used `time.time()` in `_get_inventory_lookup_map()` but did not import `time`.
+- Fixed:
+  - restored `import time` in `billing.py`.
+  - reduced visual noise in the Price/Qty row by hiding helper text for `pcs` products and before product selection.
+  - loose-unit helper still appears for kg/L/ml/g products.
+- Verification:
+  - focused tests: 18 passed
+  - `python -m pytest -q`
+  - Result: 171 passed.
+
+## 2026-04-29 - Reports.py Split Blueprint + Phase 1
+- User requested full `reports.py` audit, split blueprint, and Phase 1 start.
+- Audit result:
+  - `reports.py` is about 326 KB / 2,042 lines.
+  - It still combines ReportsFrame UI, bill text preview, saved bill file actions, delete/restore, exports, charts, service report, pagination, and side-effect wrappers.
+  - Existing helpers already extracted: `reports_data.py`, `reports_export.py`, context/deleted/reprint modules.
+- Added master blueprint:
+  - `docs/REPORTS_PY_SPLIT_MASTER_BLUEPRINT.md`
+  - Planned 8 safe phases from pure preview builder extraction through final ReportsFrame shrink.
+- Phase 1 completed:
+  - extracted bill preview text reconstruction to `src\blite_v6\reports\bill_text.py`.
+  - kept `reports.py` compatibility alias `_build_bill_text` so current call sites remain stable.
+  - preserved legacy `name:price` report item parsing and current `mode~name~price~qty` parsing.
+  - corrected preview quantity formatting so grocery/loose decimal quantities such as `1.24` are not truncated in Reports preview text.
+- Added tests:
+  - `tests\test_reports_bill_text.py`
+- Verification:
+  - focused tests: 4 passed
+  - `python -m pytest -q`
+  - Result: 175 passed.
+
+## 2026-04-29 - Reports.py Phase 2: Saved Bill File Actions
+- User requested Reports.py Phase 2.
+- Scope kept safe:
+  - no V5.6 changes.
+  - no Saved Bills UI redesign.
+  - no permission/delete/restore behavior changes.
+  - print/open/WhatsApp dialogs and threading remain in `ReportsFrame`.
+- Extracted helper module:
+  - `src\blite_v6\reports\saved_bills.py`
+- Moved out of `reports.py`:
+  - saved PDF filename parsing.
+  - saved PDF directory listing and short-lived cache.
+  - Treeview selected saved bill DTO building.
+  - report-row lookup by invoice for WhatsApp phone/fallback preview.
+  - PDF text extraction via PyMuPDF/pdfplumber with report-text fallback.
+- `reports.py` now calls:
+  - `list_saved_bill_files()`
+  - `build_saved_bill_preview_text()`
+  - `find_report_row_by_invoice()`
+  - `selected_saved_bill_from_tree()`
+- Added tests:
+  - `tests\test_reports_saved_bills.py`
+- Verification:
+  - focused tests: 10 passed
+  - `python -m py_compile reports.py src\blite_v6\reports\saved_bills.py`
+  - `python -m pytest -q`
+  - Result: 181 passed.
+
+## 2026-04-29 - Reports.py Phase 3: Report Row Loading View Model
+- User requested Reports.py Phase 3.
+- Scope kept safe:
+  - raw report loading remains in `reports_data.py`.
+  - date validation and UI message boxes remain in `ReportsFrame`.
+  - Treeview insert/delete and pagination buttons remain in `ReportsFrame`.
+- Extracted helper module:
+  - `src\blite_v6\reports\report_view.py`
+- Moved out of `reports.py`:
+  - report summary totals for cards.
+  - page clamping and page row slicing.
+  - sales Treeview row value formatting.
+  - result-label message copy for search/non-search states.
+- `reports.py` now calls:
+  - `build_report_summary()`
+  - `paginate_report_rows()`
+  - `max_report_page()`
+  - `report_tree_values()`
+  - `report_result_message()`
+- Added tests:
+  - `tests\test_reports_view_model.py`
+- Verification:
+  - focused tests: 15 passed
+  - `python -m py_compile reports.py src\blite_v6\reports\report_view.py`
+  - `python -m pytest -q`
+  - Result: 186 passed.
+
+## 2026-04-29 - Reports.py Phase 4: Export Center Wrappers
+- User requested Reports.py Phase 4.
+- Scope kept safe:
+  - export center UI, file dialogs, message boxes, and file-open side effects remain in `ReportsFrame`.
+  - actual export engine functions remain in `exports/export_engine.py`.
+  - no export schema, report totals, or saved bill behavior changed.
+- Extracted helper module:
+  - `src\blite_v6\reports\export_actions.py`
+- Moved out of `reports.py`:
+  - report filter normalization.
+  - export success/empty UI result construction.
+  - selected report customer row extraction.
+  - standard search/date/customer ledger export call wrappers.
+- `reports.py` now calls:
+  - `collect_report_filters()`
+  - `build_export_ui_result()`
+  - `selected_customer_from_row()`
+  - `run_search_export()`
+  - `run_date_export()`
+  - `run_customer_ledger_export()`
+- Added tests:
+  - `tests\test_reports_export_actions.py`
+- Verification:
+  - focused tests: 22 passed
+  - `python -B -m py_compile reports.py src\blite_v6\reports\export_actions.py`
+  - full pytest: 193 passed.
+
+## 2026-04-29 - Reports.py Phase 5: Service Report Builder
+- User requested Reports.py Phase 5.
+- Scope kept safe:
+  - Service Report tab UI, date entry controls, Treeview widgets, and pager button construction remain in `ReportsFrame`.
+  - raw report loading still goes through `_read_report()` / `reports_data.py`.
+  - no chart, saved bill, export, delete/restore, or billing flow changed.
+- Extracted helper module:
+  - `src\blite_v6\reports\service_report.py`
+- Moved out of `reports.py`:
+  - service/product item parsing.
+  - legacy `name:price` item handling for service reports.
+  - service/product aggregation.
+  - service sorting by name/count/revenue/average.
+  - service/product page slicing and page clamping.
+  - Treeview value formatting for service and product report rows.
+- Correctness fix:
+  - decimal product quantities, such as grocery loose-weight sales, are preserved instead of being truncated with `int(float(qty))`.
+- `reports.py` now calls:
+  - `build_service_report_rows()`
+  - `paginate_service_report_rows()`
+  - `max_service_report_page()`
+  - `service_report_tree_values()`
+  - `product_report_tree_values()`
+- Added tests:
+  - `tests\test_reports_service_report.py`
+- Verification:
+  - focused reports tests: 27 passed
+  - `python -B -m py_compile reports.py src\blite_v6\reports\service_report.py`
+  - full pytest: 198 passed.
+
+## 2026-04-29 - Reports.py Phase 6: Delete/Restore and Context Menus
+- User requested Reports.py Phase 6.
+- Scope kept safe:
+  - message boxes, password prompts, permission calls, DB soft-delete/restore/permanent-delete calls, file moves/removes, and Tk deleted-bills dialog UI remain in `ReportsFrame`.
+  - no billing save/report persistence behavior changed.
+  - no saved PDF open/print/WhatsApp behavior changed.
+- Extracted helper module:
+  - `src\blite_v6\reports\delete_restore.py`
+- Moved out of `reports.py`:
+  - admin/manager/owner role decision.
+  - sales context-menu selected-row payload building.
+  - selected report bill DTO construction.
+  - delete target label and confirmation prompt construction.
+  - deleted-bills role note and Treeview values.
+  - deleted DB record normalization.
+  - delete audit map construction.
+  - trash PDF entry merging and deleted-entry sorting.
+- Cleanup:
+  - removed the old inline deleted-entry builder after replacing it with the helper-backed method.
+- Added tests:
+  - `tests\test_reports_delete_restore.py`
+- Verification:
+  - focused reports tests: 34 passed
+  - `python -B -m py_compile reports.py src\blite_v6\reports\delete_restore.py`
+  - full pytest: 205 passed.
+
+## 2026-04-29 - Reports.py Phase 7: Chart Data Builder
+- User requested Reports.py Phase 7 and asked whether `reports.py` really needed this much splitting.
+- Decision:
+  - yes, `reports.py` was large enough to justify phased splitting because it combined report UI, data loading, bill preview, saved bill file actions, exports, service reports, delete/restore, context menus, and chart aggregation/drawing.
+  - after Phase 7, the planned Reports.py split has one phase left: Phase 8 final integration shrink/manual smoke gate.
+- Scope kept safe:
+  - matplotlib figure creation, visual styling, axes, labels, and Tk canvas embedding remain in `ReportsFrame`.
+  - only chart data aggregation moved out.
+- Extracted helper module:
+  - `src\blite_v6\reports\chart_data.py`
+- Moved out of `reports.py`:
+  - daily 30-day revenue series building.
+  - latest monthly revenue series building.
+  - payment-method revenue series building.
+  - top-service revenue series building.
+- Correctness fix:
+  - top-service chart revenue now supports decimal quantities instead of integer-only quantity math.
+- Added tests:
+  - `tests\test_reports_chart_data.py`
+- Verification:
+  - focused reports tests: 38 passed
+  - `python -B -m py_compile reports.py src\blite_v6\reports\chart_data.py`
+  - full pytest: 209 passed.
+
+## 2026-04-29 - Reports.py Phase 8: Final Integration Shrink / Manual Smoke Gate
+- User requested Reports.py Phase 8.
+- Decision:
+  - the planned Reports.py split is complete after this phase.
+  - further Reports work should wait for live V6 manual smoke unless a specific bug appears.
+- Scope kept safe:
+  - `ReportsFrame` remains the public UI entry point used by `main.py`.
+  - Tk UI layout, side-effect actions, dialogs, print/PDF/WhatsApp calls, and DB delete/restore operations remain in `reports.py`.
+  - no V5.6 files were changed.
+- Cleanup:
+  - removed unused post-split imports from `reports.py`.
+  - kept the extracted helper modules as the stable responsibility boundaries.
+- Added tests:
+  - `tests\test_reports_final_integration_smoke.py`
+- Current `reports.py` size:
+  - 313,402 bytes
+  - 1,779 lines
+- Verification:
+  - `python -B -m py_compile reports.py` plus all split Reports helper modules
+  - focused Reports tests: 42 passed
+  - full pytest: 213 passed.
+- Next gate:
+  - live V6 manual Reports smoke: load reports, search/filter, preview row, saved bills, export actions, service report, charts, delete/restore with admin, and confirm Billing still opens.
+
+## 2026-04-29 - Next Split Blueprint: Salon Settings.py
+- User requested the next splitting blueprint.
+- Decision:
+  - next recommended split target is `salon_settings.py`.
+  - reason: after Billing/Main/Reports, it is the largest active non-reference file and controls high-risk app-wide behavior: settings persistence, themes, Bill/GST, print, security, preferences, notifications, advanced features, AI, backup, licensing, and about/update diagnostics.
+- Blueprint added:
+  - `docs\SALON_SETTINGS_PY_SPLIT_MASTER_BLUEPRINT.md`
+- Planned phase count:
+  - 8 phases, starting with low-risk core settings persistence and theme helpers.
+- Scope kept safe:
+  - no code behavior changes.
+  - no V5.6 files changed.
+  - `SettingsFrame` remains the public UI entry point until final integration.
+- Verification:
+  - `python -m py_compile salon_settings.py`
+- Recommended next implementation:
+  - Salon Settings.py Phase 1 - Core Settings Persistence and Theme Helpers.
+
+## 2026-04-29 - Salon Settings.py Phase 1: Core Settings Persistence and Theme Helpers
+- User requested Salon Settings.py Phase 1.
+- Scope kept safe:
+  - V6-only change.
+  - no V5.6 files changed.
+  - no SettingsFrame UI layout changed.
+  - `salon_settings.py` public API compatibility preserved.
+- Extracted helper package:
+  - `src\blite_v6\settings\__init__.py`
+  - `src\blite_v6\settings\core.py`
+  - `src\blite_v6\settings\themes.py`
+- Moved out of `salon_settings.py`:
+  - `DEFAULTS`
+  - `F_SETTINGS`
+  - settings file-mtime cache
+  - `_invalidate_settings_cache()`
+  - `get_settings()`
+  - `save_settings()`
+  - `get_current_theme()`
+  - `feature_enabled()`
+  - `THEMES`
+  - `LEGACY_THEME_MAP`
+  - `apply_theme()`
+- Compatibility:
+  - `salon_settings.py` imports and re-exports the moved names so existing callers keep working.
+- Added tests:
+  - `tests\test_settings_core_theme.py`
+- Current `salon_settings.py` size:
+  - 97,208 bytes
+  - 1,817 lines
+- Verification:
+  - `python -m py_compile salon_settings.py src\blite_v6\settings\core.py src\blite_v6\settings\themes.py`
+  - focused settings tests: 6 passed.
+  - `python -m pytest -p no:cacheprovider -q tests`
+  - Result: 232 passed.
+- Note:
+  - bare full pytest from repo root still hits existing permission-denied temp folders (`pytest_tmp_resume_full2`, `pytest_tmp_resume_tests_only`), so the verified full suite target was `tests`.
+- Next:
+  - Salon Settings.py Phase 2 - Startup Runtime Utility.
+
+## 2026-04-29 - Salon Settings.py Phase 2: Startup Runtime Utility
+- User requested Salon Settings.py Phase 2.
+- Scope kept safe:
+  - V6-only change.
+  - no V5.6 files changed.
+  - no SettingsFrame UI layout changed.
+  - no real registry writes in tests.
+- Extracted helper module:
+  - `src\blite_v6\settings\startup.py`
+- Moved out of `salon_settings.py`:
+  - `setup_windows_startup(enable)`
+- Added helper functions:
+  - `default_main_script_path()`
+  - `build_startup_command(executable=None, main_script=None)`
+- Safety fix:
+  - preserved the intended project-root `main.py` startup target after moving code into `src\blite_v6\settings`.
+  - without this, using the extracted module's `__file__` directly would point startup at the wrong folder.
+- Compatibility:
+  - `salon_settings.setup_windows_startup` still exists and points to the extracted function.
+- Added tests:
+  - `tests\test_settings_startup.py`
+- Current `salon_settings.py` size:
+  - 96,347 bytes
+  - 1,793 lines
+- Verification:
+  - `python -m py_compile salon_settings.py src\blite_v6\settings\core.py src\blite_v6\settings\themes.py src\blite_v6\settings\startup.py`
+  - focused settings tests: 12 passed.
+  - `python -m pytest -p no:cacheprovider -q tests`
+  - Result: 238 passed.
+- Next:
+  - Salon Settings.py Phase 3 - Tab Specs and Lazy Tab Coordination.
+
+## 2026-04-29 - Salon Settings.py Phase 3: Tab Specs and Lazy Tab Coordination
+- User requested Salon Settings.py Phase 3.
+- Scope kept safe:
+  - V6-only change.
+  - no V5.6 files changed.
+  - no broad Settings UI rewrite.
+  - `SettingsFrame` still owns real `ttk.Notebook` creation, tab add/remove/forget/select, icon assignment, and lazy tab rendering.
+- Extracted helper module:
+  - `src\blite_v6\settings\tab_specs.py`
+- Moved out of `salon_settings.py`:
+  - settings tab order and AI tab insertion decision.
+  - optional AI tab sync plan data.
+  - Advanced Features status-card data builder.
+- Compatibility:
+  - `_settings_tab_defs()` remains on `SettingsFrame` and delegates to `settings_tab_defs()`.
+  - `_sync_optional_tabs()` still performs the actual Tk tab changes and uses the extracted plan.
+  - `_feature_status_grid()` still renders widgets; only its input data builder moved out.
+- Added tests:
+  - `tests\test_settings_tab_specs.py`
+- Current `salon_settings.py` size:
+  - 95,327 bytes
+  - 1,772 lines
+- Verification:
+  - `python -m py_compile salon_settings.py src\blite_v6\settings\core.py src\blite_v6\settings\themes.py src\blite_v6\settings\startup.py src\blite_v6\settings\tab_specs.py`
+  - focused settings tests: 17 passed.
+  - `python -m pytest -p no:cacheprovider -q tests`
+  - Result: 243 passed.
+- Manual smoke still recommended:
+  - open Settings, confirm tab order, toggle AI Assistant in Advanced Features, save, confirm AI tab appears/disappears without app close.
+- Next:
+  - Salon Settings.py Phase 4 - Bill/GST and Print Settings Models.
+
+## 2026-04-29 - Salon Settings.py Phase 4: Bill/GST and Print Settings Models
+- User asked to resume the last task; resumed the queued Salon Settings split after Phase 3.
+- Scope kept safe:
+  - V6-only change.
+  - no V5.6 files changed.
+  - no SettingsFrame tab layout rewrite.
+  - Tk widgets and button bindings remain inside `salon_settings.py`.
+- Extracted helper modules:
+  - `src\blite_v6\settings\bill_gst.py`
+  - `src\blite_v6\settings\print_settings.py`
+- Moved out of `salon_settings.py`:
+  - Bill/GST save payload construction.
+  - GST-rate fallback parsing.
+  - Bill/GST saved-message text.
+  - Print settings save payload construction.
+  - Print-width fallback parsing.
+  - Print saved-message text.
+  - Print preview text generation.
+- Compatibility:
+  - `salon_settings.py` imports and re-exports the moved helper names.
+  - `_save_bill`, `_save_print`, and `_update_print_preview` still exist and delegate to extracted helpers.
+- Added tests:
+  - `tests\test_settings_bill_print.py`
+- Current `salon_settings.py` size:
+  - 94,133 bytes
+  - 1,941 physical lines
+- Verification:
+  - Bundled Python `py_compile` passed for `salon_settings.py` and extracted settings helper modules.
+  - Direct helper smoke passed with test `APPDATA`, including compatibility import from `salon_settings`.
+  - Full pytest was not rerun in this resumed environment because `python`/`py` are unavailable on PATH, bundled Python has no `pytest`, and the existing `.venv-build` launcher points to a missing Python install.
+- Manual smoke still recommended:
+  - open Settings, save Bill/GST, open Billing and confirm billing mode behavior.
+  - save Print/Bill settings and verify bill preview/PDF/print fallback.
+- Next:
+  - Salon Settings.py Phase 5 - Security, Preferences, and Notifications.
+
+## 2026-04-29 - Salon Settings.py Phase 5: Security, Preferences, and Notifications
+- User requested Salon Settings.py Phase 5.
+- Scope kept safe:
+  - V6-only change.
+  - no V5.6 files changed.
+  - no Security/Preferences/Notifications UI layout rewrite.
+  - password verification, password hashing, user persistence, Windows startup registry call, runtime preference application, and Tk messageboxes remain in `salon_settings.py`.
+- Extracted helper modules:
+  - `src\blite_v6\settings\security_settings.py`
+  - `src\blite_v6\settings\preferences.py`
+  - `src\blite_v6\settings\notifications.py`
+- Moved out of `salon_settings.py`:
+  - current username normalization.
+  - password visibility `show` value decision.
+  - new-password min-length and confirmation validation.
+  - session-timeout numeric fallback helper.
+  - security save payload construction.
+  - preferences save payload construction.
+  - preferences saved-message text for Windows startup failure.
+  - notification save payload construction.
+  - notification popup-time boundary normalization.
+  - dismissed notification count/reset payload helpers.
+- Compatibility:
+  - `salon_settings.py` imports and re-exports the moved helper names.
+  - `_change_pw`, `_save_security`, `_save_prefs`, `_reset_dismissed`, and `_save_notifs` still exist and delegate to extracted helpers.
+- Added tests:
+  - `tests\test_settings_security_prefs_notifications.py`
+- Current `salon_settings.py` size:
+  - 94,247 bytes
+  - 1,954 physical lines
+- Verification:
+  - Bundled Python `py_compile` passed for `salon_settings.py`, Phase 5 helper modules, and the new test file.
+  - Direct Phase 5 helper smoke passed with test `APPDATA`, including compatibility imports from `salon_settings`.
+  - Full pytest was not rerun in this resumed environment because `python`/`py` are unavailable on PATH, bundled Python has no `pytest`, and the existing `.venv-build` launcher points to a missing Python install.
+- Manual smoke still recommended:
+  - Security tab opens and password visibility toggles.
+  - Invalid password, mismatch, and min-length messages display correctly.
+  - Preferences save works and runtime preferences still apply.
+  - Notifications save/reset dismissed works.
+- Next:
+  - Salon Settings.py Phase 6 - Advanced Features, WhatsApp API, Multibranch, AI.
+
+## 2026-04-29 - Salon Settings.py Phase 6: Advanced Features, WhatsApp API, Multibranch, AI
+- User requested Salon Settings.py Phase 6.
+- Scope kept safe:
+  - V6-only change.
+  - no V5.6 files changed.
+  - no Advanced/AI UI layout rewrite.
+  - no provider behavior change.
+  - no secrets moved into pure helpers or tests.
+  - secure-store calls, keyring warnings, provider creation, Multi-Branch manager calls, runtime feature application, and messageboxes remain in `salon_settings.py`.
+- Extracted helper module:
+  - `src\blite_v6\settings\advanced_integrations.py`
+- Moved out of `salon_settings.py`:
+  - WhatsApp API validation/test message text.
+  - WhatsApp API config payload construction.
+  - Multi-Branch sync interval normalization.
+  - Multi-Branch test status text/color decision.
+  - Multi-Branch config payload construction.
+  - Advanced feature flag payload construction.
+  - AI model constants.
+  - AI storage hint, config payload, saved-message text, and status text/color decision.
+- Secret safety:
+  - WhatsApp, Multi-Branch, and AI helper payloads always write `api_key` as an empty string.
+  - Only `storage` metadata is saved in settings JSON.
+- Compatibility:
+  - `salon_settings.py` imports and re-exports the moved helper names.
+  - `_validate_whatsapp_provider`, `_test_whatsapp_provider`, `_test_multibranch_connection`, `_save_advanced`, `_save_ai`, and `_refresh_ai_status` still exist and delegate to extracted helpers.
+- Added tests:
+  - `tests\test_settings_advanced_integrations.py`
+- Current `salon_settings.py` size:
+  - 92,973 bytes
+  - 1,943 physical lines
+- Verification:
+  - Bundled Python `py_compile` passed for `salon_settings.py`, `advanced_integrations.py`, and the new test file.
+  - Direct Phase 6 test functions passed with test `APPDATA`, including compatibility imports from `salon_settings`.
+  - Full pytest was not rerun in this resumed environment because `python`/`py` are unavailable on PATH, bundled Python has no `pytest`, and the existing `.venv-build` launcher points to a missing Python install.
+- Manual smoke still recommended:
+  - Advanced Features tab opens.
+  - WhatsApp provider validate/test buttons do not crash.
+  - Multi-Branch test updates status label.
+  - AI tab opens, AI save/status refresh works.
+- Next:
+  - Salon Settings.py Phase 7 - Backup, Licensing, About, Context Menus.
+
+## 2026-04-29 - Salon Settings.py Phase 7: Backup, Licensing, About, Context Menus
+- User requested Salon Settings.py Phase 7.
+- Scope kept safe:
+  - V6-only change.
+  - no V5.6 files changed.
+  - no Backup/Licensing/About UI layout rewrite.
+  - no licensing behavior change.
+  - backup config writes, scheduler start/stop, activity-log viewer launch, license manager status fetch, activation dialog launch, update checker threading, browser opening, context-menu renderer calls, and callback registration remain in `salon_settings.py`.
+- Extracted helper module:
+  - `src\blite_v6\settings\backup_license_about.py`
+- Moved out of `salon_settings.py`:
+  - backup schedule payload construction.
+  - backup last-run/error info text.
+  - activity count display text.
+  - license status row mapping and reminder note.
+  - activation note text.
+  - About version rows.
+  - VC++ runtime status text/color.
+  - update-available message and manifest URL payload.
+  - Settings backup/license/about context selected-data builders.
+- Compatibility:
+  - `salon_settings.py` imports and re-exports the moved helper names.
+  - `_tab_backup`, `_tab_license`, `_tab_about`, `_check_vc_runtime`, `_manual_update_check`, `_save_update_manifest_url`, and context menu methods still exist and delegate to extracted helpers.
+- Added tests:
+  - `tests\test_settings_backup_license_about.py`
+- Current `salon_settings.py` size:
+  - 91,521 bytes
+  - 1,932 physical lines
+- Verification:
+  - Bundled Python `py_compile` passed for `salon_settings.py`, `backup_license_about.py`, and the new test file.
+  - Direct Phase 7 test functions passed with test `APPDATA`, including compatibility imports from `salon_settings`.
+  - Full pytest was not rerun in this resumed environment because `python`/`py` are unavailable on PATH, bundled Python has no `pytest`, and the existing `.venv-build` launcher points to a missing Python install.
+- Manual smoke still recommended:
+  - Backup tab opens and backup schedule save still works.
+  - Licensing tab opens and refresh/activation dialog buttons still work.
+  - About tab opens, VC++ check displays, manifest URL save/check flow still works.
+  - Backup folder, license IDs, and manifest URL context menus do not crash.
+- Next:
+  - Salon Settings.py Phase 8 - Final Integration Shrink and Manual Smoke Gate.
+
+## 2026-04-29 - Salon Settings.py Phase 8: Final Integration Shrink and Manual Smoke Gate
+- User requested Salon Settings.py Phase 8.
+- Scope kept safe:
+  - V6-only change.
+  - no V5.6 files changed.
+  - no Settings public entry point removed.
+  - no save/action side-effect boundaries moved.
+- Shrink completed:
+  - removed unreachable duplicate Security tab build code after `render_security_tab(self)`.
+  - removed unreachable duplicate Advanced tab build code after `render_advanced_tab(self)`.
+  - delegated AI tab rendering to `ai_settings_tab.render_ai_settings_tab(self)`.
+- Preserved in `salon_settings.py`:
+  - password verification and user save side effects.
+  - Windows startup registry call.
+  - WhatsApp, Multi-Branch, and AI secure-store/provider side effects.
+  - backup scheduler/config side effects.
+  - licensing manager and activation dialog side effects.
+  - update checker/browser side effects.
+  - context menu renderer and action callback registration.
+- Added final report:
+  - `docs\SALON_SETTINGS_PHASE8_FINAL_INTEGRATION_REPORT.md`
+- Current `salon_settings.py` size:
+  - 79,338 bytes
+  - 1,699 physical lines
+- Verification:
+  - Bundled Python `py_compile` passed for `salon_settings.py`, `security_tab.py`, `advanced_tab.py`, and `ai_settings_tab.py`.
+  - Import smoke passed for `salon_settings`, `security_tab`, `advanced_tab`, and `ai_settings_tab`.
+  - Settings direct no-fixture tests passed: 33 passed.
+  - 6 pytest-fixture tests were skipped because this resumed environment has no pytest runner.
+  - Full pytest was not rerun because `python`/`py` are unavailable on PATH, bundled Python has no `pytest`, and the existing `.venv-build` launcher points to a missing Python install.
+- Manual smoke still required:
+  - Follow `docs\SALON_SETTINGS_PHASE8_FINAL_INTEGRATION_REPORT.md`.
+- Result:
+  - Salon Settings split is complete through Phase 8 pending manual Settings smoke.
+## 2026-04-29 - Deferred Dashboard Graphical Mode
+- User requested a modern graphical dashboard for better user satisfaction.
+- Decision:
+  - Do not add before the current EXE build/license smoke gate.
+  - Track as a later UI enhancement phase.
+- Blueprint updates:
+  - Added Dashboard Graphical Mode future phase to `NEXT_UPDATE_QA_BLUEPRINT.md`.
+  - Added deferral note to `docs/REMAINING_SPLIT_NECESSITY_AUDIT.md`.
+- Intended later scope:
+  - Preferences switch for classic/graphical dashboard.
+  - Read-only Tkinter/Canvas charts for sales trends, product/service split, payment split, low stock, and recent bills.
+  - Keep classic dashboard fallback.
+
+## 2026-04-30 - Inventory/Grocery Blueprint and Split Closure Decision
+- User requested the Inventory/Grocery implementation blueprint and asked whether the broad splitting phase can be closed.
+- Decision:
+  - Broad Billing/Main/Reports/Settings split work is functionally complete.
+  - Top-level wrapper files must remain in place and must not be deleted.
+  - Do not do broad wrapper shrinking during grocery implementation.
+  - Future grocery/retail behavior should be implemented in new focused modules.
+- Added:
+  - `docs\INVENTORY_GROCERY_IMPLEMENTATION_BLUEPRINT.md`
+- Updated:
+  - `docs\UNIVERSAL_RETAIL_GROCERY_BLUEPRINT.md`
+  - `docs\REMAINING_SPLIT_NECESSITY_AUDIT.md`
+  - `NEXT_UPDATE_QA_BLUEPRINT.md`
+- Next safe implementation phase:
+  - Inventory/Grocery Phase G1 - pure product/unit domain helpers.
+
+## 2026-04-30 - Final Shrink Phase 1: Salon Settings Wrapper Shrink
+- User confirmed source/EXE manual smoke passed and requested Final Shrink Phase with a manual checklist after each phase.
+- Phase 1 scope:
+  - `salon_settings.py` only.
+  - no feature work.
+  - no V5.6 edits.
+  - no public Settings entry point removed.
+- Cleanup:
+  - removed unreachable old Shop Info UI code after `return render_shop_info_tab(self)`.
+  - removed unreachable old Theme UI code after `return render_theme_tab(self)`.
+  - kept `_save_info`, `_browse_logo`, `_apply_theme`, and the public `SettingsFrame` compatibility surface.
+- Result:
+  - `salon_settings.py` reduced from 1,744 lines to 1,571 lines in this phase.
+  - 173 unreachable lines removed.
+- Manual checklist added:
+  - `docs\FINAL_SHRINK_PHASE_MANUAL_TEST_CHECKLIST.md`
+- Verification:
+  - `py_compile` passed for `salon_settings.py`, `salon_info_tab.py`, `theme_tab.py`, and `src\blite_v6\settings\*.py`.
+  - focused Settings tests: 34 passed.
+- Next:
+  - Final Shrink Phase 2 - Main wrapper shrink.
+
+## 2026-04-30 - Final Shrink Phase 2: Main Wrapper Shrink
+- User ran `main.py` and shared Settings screenshots after Phase 1.
+- Screenshot review:
+  - `main.py` source mode is running as expected.
+  - About tab showing `Development (Source)` is expected for source run.
+  - Settings tabs shown by the user opened without visible crash.
+- Phase 2 scope:
+  - `main.py` only.
+  - no feature work.
+  - no V5.6 edits.
+  - no public app entry point removed.
+- Cleanup:
+  - removed unused old full-screen startup splash methods:
+    - `_show_startup_splash`
+    - `_finish_startup_splash`
+    - `_play_startup_media`
+  - removed startup-ui imports used only by those dead methods.
+  - preserved the current source/EXE startup placeholder and loading logo path.
+- Result:
+  - `main.py` reduced from 1,643 lines to 1,513 lines in this phase.
+  - 130 unused startup-splash lines removed.
+- Manual checklist updated:
+  - `docs\FINAL_SHRINK_PHASE_MANUAL_TEST_CHECKLIST.md`
+- Verification:
+  - `py_compile` passed for `main.py` and the related app helper modules.
+  - focused Main tests: 44 passed.
+- Next:
+  - Final Shrink Phase 3 - Reports wrapper shrink.
+
+## 2026-04-30 - Final Shrink Phase 3: Reports Wrapper Shrink
+- Phase 3 scope:
+  - `reports.py` only.
+  - no feature work.
+  - no V5.6 edits.
+  - no public `ReportsFrame` entry point removed.
+- Cleanup:
+  - cleaned corrupted/mojibake wrapper comments and docstrings.
+  - preserved all report helper delegation through `src\blite_v6\reports\*`.
+  - preserved sales list, saved bills, exports, service report, chart data, delete/restore, print, and load-to-bill behavior.
+- Result:
+  - `reports.py` reduced from 1,794 lines to 1,783 lines in this phase.
+  - 11 non-runtime wrapper text lines removed.
+- Manual checklist updated:
+  - `docs\FINAL_SHRINK_PHASE_MANUAL_TEST_CHECKLIST.md`
+- Verification:
+  - `py_compile` passed for `reports.py` and the related report helper modules.
+  - focused Reports tests: 46 passed.
+- Next:
+  - Final Shrink Phase 4 - Billing wrapper shrink.
+
+## 2026-04-30 - Final Shrink Phase 4: Billing Wrapper Shrink
+- Phase 4 scope:
+  - `billing.py` only.
+  - no feature work.
+  - no V5.6 edits.
+  - no public `BillingFrame` entry point removed.
+- Cleanup:
+  - cleaned corrupted/mojibreak wrapper comments and docstrings.
+  - preserved all billing helper delegation through `src\blite_v6\billing\*`.
+  - preserved totals, cart operations, barcode, customer lookup, offers/coupons/redeem, Save/PDF/Print/WhatsApp, product unit visibility, shortcuts, and context-menu behavior.
+- Result:
+  - `billing.py` reduced from 2,371 lines to 2,349 lines in this phase.
+  - 22 non-runtime wrapper text lines removed.
+- Manual checklist updated:
+  - `docs\FINAL_SHRINK_PHASE_MANUAL_TEST_CHECKLIST.md`
+- Verification:
+  - `py_compile` passed for `billing.py` and the related billing helper modules.
+  - focused Billing and loose-quantity tests: 116 passed.
+  - final source test gate, `python -m pytest -q tests`: 276 passed.
+  - root-level pytest collection hit permission-protected temporary folders, so the trusted gate is the `tests` folder run.
+- Next:
+  - Source manual smoke using the Phase 4 checklist.
+  - Then Inventory/Grocery Phase G1 if smoke remains clean.
+
+## 2026-04-30 - Inventory/Grocery Phase G1: Pure Product/Unit Domain Helpers
+- User requested Inventory/Grocery Phase G1 after manual gate passed.
+- Removed the deferred date-format preference blueprint because selectable date formats were judged unnecessary/risky for now.
+- Scope kept pure and additive:
+  - no UI wiring.
+  - no DB migration.
+  - no billing totals, reports, print, PDF, or WhatsApp behavior changed.
+- Added:
+  - `src/blite_v6/inventory_grocery/__init__.py`
+  - `src/blite_v6/inventory_grocery/product_units.py`
+  - `src/blite_v6/inventory_grocery/product_validation.py`
+  - `tests/test_inventory_grocery_product_units.py`
+  - `tests/test_inventory_grocery_product_validation.py`
+  - `docs/INVENTORY_GROCERY_PHASE_G1_MANUAL_TEST_CHECKLIST.md`
+- Implemented:
+  - supported units: `pcs`, `kg`, `g`, `L`, `ml`, `meter`, `custom`.
+  - kg/g and L/ml quantity conversions.
+  - strict positive quantity parsing for future inventory/import flows.
+  - non-negative sale price, cost price, stock, reorder, and MRP validation.
+  - GST rate validation from 0 to 100.
+  - barcode/SKU normalization.
+  - below-cost warning payload without silently rewriting prices.
+- Verification:
+  - `python -m py_compile src\blite_v6\inventory_grocery\product_units.py src\blite_v6\inventory_grocery\product_validation.py`
+  - `python -m pytest -q tests\test_inventory_grocery_product_units.py tests\test_inventory_grocery_product_validation.py`
+  - Result: 10 passed.
+  - compatibility smoke result: 28 passed.
+  - full `tests` folder result: 289 passed.
+- Manual smoke:
+  - User reported all OK and provided screenshots on 2026-04-30.
+  - Licensing Activated/Lifetime visible.
+  - Billing service/product save, PDF, print fallback, WhatsApp manual flow, and Inventory open/dialog/context menu looked healthy.
+- Next:
+  - Decide whether Phase G2 should be additive schema extension or a smaller inventory form audit before schema changes.
+
+## 2026-04-30 - Inventory/Grocery Phase G2: Additive DB Schema Dry-Run/Backup-First
+- User requested Inventory/Grocery Phase G2.
+- Scope kept schema-only and additive:
+  - no visible UI wiring.
+  - no billing total/report/print/WhatsApp behavior changed.
+  - no existing production data rewrite.
+  - no V5.6 edits.
+- Added:
+  - `src/blite_v6/inventory_grocery/schema_migration.py`
+  - `tests/test_inventory_grocery_schema_migration.py`
+  - `docs/INVENTORY_GROCERY_PHASE_G2_MANUAL_TEST_CHECKLIST.md`
+- Updated:
+  - `sql/v5_product_variant_schema.sql`
+  - `db_core/constraint_migration.py`
+  - `docs/INVENTORY_GROCERY_IMPLEMENTATION_BLUEPRINT.md`
+- Implemented dry-run/backup-first schema support for:
+  - grocery/product metadata columns on `v5_product_variants`.
+  - purchase/stock movement metadata columns on `v5_product_variant_movements`.
+  - future vendor/purchase tables.
+- Safety:
+  - Existing DB migration dry-run reports missing fields without altering DB.
+  - Apply creates a DB backup before any ALTER/CREATE.
+  - Existing price/stock values are preserved.
+  - Invalid negative financial/stock rows are reported and not silently fixed.
+  - CHECK-constraint rebuild preserves the new grocery columns.
+- Verification:
+  - `python -m py_compile src\blite_v6\inventory_grocery\schema_migration.py db_core\constraint_migration.py`
+  - `python -m pytest -q tests\test_inventory_grocery_schema_migration.py tests\test_schema_constraint_migration.py`
+  - Result: 9 passed.
+- Next:
+  - Run full source test gate.
+  - Then Phase G3 can start only after manual source smoke stays clean.
+
+## 2026-04-30 - Inventory/Grocery Phase G3: Inventory Product Master UI
+- User requested G3 and allowed skipping manual test before implementation.
+- Scope kept additive and UI-focused:
+  - existing `InventoryFrame` remains the compatibility wrapper.
+  - no billing total, reports, PDF, print, or WhatsApp behavior changed.
+  - no V5.6 edits.
+- Added:
+  - `src/blite_v6/inventory_grocery/product_form.py`
+  - `tests/test_inventory_grocery_product_form.py`
+  - `docs/INVENTORY_GROCERY_PHASE_G3_MANUAL_TEST_CHECKLIST.md`
+- Updated:
+  - `inventory.py`
+  - `repositories/product_variants_repo.py`
+  - `services_v5/product_catalog_service.py`
+  - `services_v5/inventory_service.py`
+  - `docs/INVENTORY_GROCERY_IMPLEMENTATION_BLUEPRINT.md`
+- Implemented:
+  - editable inventory category entry for controlled new category creation.
+  - SKU, sale price, MRP, GST rate, HSN/SAC fields.
+  - sale unit / price basis and base-unit fields.
+  - tax-inclusive, decimal quantity, and weighed/loose flags.
+  - below-cost warning requiring explicit continue before saving.
+  - product variant repository support for optional G2 columns only when present.
+- Safety:
+  - Existing salon item fields and save path remain available.
+  - Existing DBs that have not run the G2 migration are protected by optional-column writes.
+  - Barcode duplicate warning behavior is preserved.
+- Verification:
+  - `python -m py_compile inventory.py repositories\product_variants_repo.py services_v5\inventory_service.py services_v5\product_catalog_service.py src\blite_v6\inventory_grocery\product_form.py`
+  - `python -m pytest -q tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_validation.py tests\test_inventory_grocery_schema_migration.py`
+  - Result: 16 passed.
+  - Compatibility gate: `python -m pytest -q tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_validation.py tests\test_inventory_grocery_schema_migration.py tests\test_inventory_grocery_product_units.py tests\test_inventory_loose_quantity.py tests\test_billing_product_unit_metadata.py`
+  - Result: 23 passed.
+  - Full source gate: `python -m pytest -q tests`
+  - Result: 300 passed.
+- Manual checklist:
+  - `docs/INVENTORY_GROCERY_PHASE_G3_MANUAL_TEST_CHECKLIST.md`
+- Next:
+  - Run G3 manual source smoke when user is ready.
+  - Then continue to G4 billing loose quantity workflow or pause for EXE smoke.
+
+## 2026-04-30 - Inventory/Grocery Phase G4: Billing Quantity/Unit Workflow
+- Continued from the G3 handoff and aligned the phase numbering with the current plan:
+  - G4 is billing loose quantity/unit workflow.
+  - Bulk import is deferred to G6.
+- Scope kept focused on existing billing, stock, and output behavior:
+  - no V5.6 edits.
+  - no product-wise GST changes.
+  - no vendor/purchase workflow changes.
+  - no wrapper deletion or shrink.
+- Confirmed implemented source behavior:
+  - Billing product selection receives inventory/product unit metadata.
+  - Quantity entry accepts decimal base-unit input for loose products.
+  - Quantity entry converts compatible shorthand such as `1240g` to `1.24 kg`.
+  - Cart items keep unit metadata for product rows.
+  - Bill preview and edit quantity use unit-aware labels.
+  - Print/PDF/WhatsApp output path receives unit-aware quantity labels through print helpers.
+  - Inventory sale deduction preserves decimal quantities.
+  - Packet/pieces products stay on the simple quantity path.
+- Added:
+  - `docs/INVENTORY_GROCERY_PHASE_G4_MANUAL_TEST_CHECKLIST.md`
+- Updated:
+  - `docs/INVENTORY_GROCERY_IMPLEMENTATION_BLUEPRINT.md`
+  - `docs/MIGRATION_LEDGER.md`
+- Verification:
+  - `python -m py_compile billing.py inventory.py print_engine.py print_utils.py adapters\product_catalog_adapter.py src\blite_v6\billing\cart_operations.py src\blite_v6\billing\ui_sections.py src\blite_v6\billing\bill_document.py src\blite_v6\billing\catalog_search.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_inventory_billing_bridge.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_units.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_inventory_loose_quantity.py tests\test_loose_quantity_printing.py tests\test_billing_cart_operations.py tests\test_billing_unit_visibility.py`
+  - Result: 39 passed.
+- Manual checklist:
+  - `docs/INVENTORY_GROCERY_PHASE_G4_MANUAL_TEST_CHECKLIST.md`
+- Next:
+  - Source-mode manual smoke for G3/G4 together.
+  - If clean, rebuild/reinstall before expecting the installed EXE to show these changes.
+
+## 2026-04-30 - Inventory/Grocery Phase G3 Follow-up: Billing Picker Reads Active Inventory
+- User reported G3 was not complete:
+  - Inventory-added `Test Rice Packet 1kg` and `Test Tomato Loose` did not appear in Billing product search.
+  - Admin Panel product `sunflower oil` did appear in Billing.
+- Root cause:
+  - Inventory Add/Edit saves through `InventoryService` into active v5 inventory/catalog SQL paths.
+  - Billing inventory bridge was still reading `load_json(F_INVENTORY)` for inventory-only rows.
+  - Admin products appeared because they are saved into `services_db` and refreshed through the legacy product catalog path.
+- Fix:
+  - `adapters/product_catalog_adapter.py` now loads Billing inventory rows from `InventoryService().build_legacy_inventory_map()` first.
+  - JSON inventory remains only as a fallback.
+  - Billing product categories, product matches, and product snapshot now use the same active inventory source as Inventory Add/Edit.
+- Added regression coverage:
+  - Billing product adapter must show InventoryService rows even when JSON inventory is empty.
+- Verification:
+  - `python -m py_compile adapters\product_catalog_adapter.py src\blite_v6\inventory_grocery\billing_inventory_bridge.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_inventory_billing_bridge.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_units.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_billing_unit_visibility.py tests\test_inventory_loose_quantity.py tests\test_loose_quantity_printing.py`
+  - Result: 30 passed.
+- Manual note:
+  - Restart source app before retesting; the already-open Billing window will not load the patched adapter code.
+
+## 2026-04-30 - Inventory/Grocery Phase G3 Follow-up 2: Billing Search Tuple Shape
+- User restarted and still saw only the Admin-created `Fortune Sunflower Oil` in Billing, while Inventory showed `Test Rice Packet 1kg`.
+- Live data inspection:
+  - `Test Rice Packet 1kg` exists and is active in `v5_inventory_items`.
+  - `Test Tomato Loose` exists and is active in `v5_inventory_items`.
+  - Both also exist as active rows in `v5_product_variants`.
+  - Admin-created `Fortune Sunflower Oil 1 Lpcs` exists in `services_db.json`.
+- Root cause:
+  - Billing UI smart-search renders tuples as `(code, name, category, price)`.
+  - Admin/legacy products used that 4-value shape.
+  - Inventory bridge rows used a 5-value shape `(code, name, category, price, barcode)`.
+  - The UI unpack failed for inventory rows, logged/swallowed the exception, and left only Admin/legacy rows visible.
+- Fix:
+  - Inventory bridge and v5 variant product matches now return the same 4-value tuple shape required by Billing UI.
+  - Barcode remains available in `variant_meta`; it is not part of the UI list tuple.
+- Verification:
+  - `python -m py_compile adapters\product_catalog_adapter.py src\blite_v6\inventory_grocery\billing_inventory_bridge.py billing.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_inventory_billing_bridge.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_billing_unit_visibility.py`
+  - Result: 18 passed.
+  - Live adapter check against AppData:
+    - `rice -> [('INV7BA250760C', 'Test Rice Packet 1kg', 'Grocery', 62.0)]`
+    - `toma -> [('INVB179E94441', 'Test Tomato Loose', 'Vegetables', 45.5)]`
+    - all returned tuple lengths are 4.
+- Manual note:
+  - Restart source app again before retesting. This is a second code fix after the previous restart.
+
+## 2026-04-30 - Billing Catalog Search Hardening: 3/4/5/6 Value Rows
+- User requested the Billing product search to tolerate future catalog row shapes instead of only one tuple length.
+- Added catalog item normalization in `src/blite_v6/billing/catalog_search.py`:
+  - 3 values:
+    - code-like first value is read as `(code, name, price)`.
+    - otherwise read as `(name, category, price)` and uses name as the code fallback.
+  - 4 values:
+    - read as canonical `(code, name, category, price)`.
+  - 5+ values:
+    - first four values are used for Billing UI; extra metadata is ignored by the list renderer.
+- Billing UI now uses the normalizer when:
+  - applying a selected product.
+  - rendering smart-search suggestions.
+  - exact-match/search helpers inspect rows.
+- Verification:
+  - `python -m py_compile billing.py src\blite_v6\billing\catalog_search.py adapters\product_catalog_adapter.py src\blite_v6\inventory_grocery\billing_inventory_bridge.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_billing_catalog_search.py tests\test_inventory_billing_bridge.py tests\test_billing_product_unit_metadata.py tests\test_billing_unit_visibility.py tests\test_billing_catalog_barcode_ui_smoke.py`
+  - Result: 21 passed.
+
+## 2026-04-30 - Billing Catalog Search Quality Hardening
+- Reviewed the search path for remaining product-quality issues after the 3/4/5/6 tuple request.
+- Additional hardening:
+  - `normalize_catalog_item()` now accepts mapping/dict rows as well as tuple/list rows.
+  - For 5/6 value rows, it detects whether the numeric price is at index 3 or index 2, so both canonical rows and name/category/price rows with extra metadata are tolerated.
+  - `smart_search()` skips invalid malformed rows instead of crashing.
+  - Billing suggestion rendering skips invalid malformed rows and keeps valid rows visible instead of blanking the whole dropdown.
+  - Empty-query smart search also normalizes and filters rows.
+- Live AppData verification after hardening:
+  - `rice -> ('INV7BA250760C', 'Test Rice Packet 1kg', 'Grocery', 62.0)`
+  - `toma -> ('INVB179E94441', 'Test Tomato Loose', 'Vegetables', 45.5)`
+  - `sun -> ('PGR001', 'Fortune Sunflower Oil 1 Lpcs', 'Grocery', 145.0)`
+- Verification:
+  - `python -m py_compile billing.py src\blite_v6\billing\catalog_search.py adapters\product_catalog_adapter.py src\blite_v6\inventory_grocery\billing_inventory_bridge.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_billing_catalog_search.py tests\test_inventory_billing_bridge.py tests\test_billing_product_unit_metadata.py tests\test_billing_unit_visibility.py tests\test_billing_catalog_barcode_ui_smoke.py tests\test_billing_cart_operations.py`
+  - Result: 33 passed.
+
+## 2026-04-30 - Inventory/Grocery Phase G5: Purchase/Vendor Foundation
+- User confirmed G3/G4 manual smoke looked OK and requested moving to G5 after another focused gate.
+- Pre-G5 gate:
+  - `python -m py_compile billing.py inventory.py adapters\product_catalog_adapter.py src\blite_v6\billing\catalog_search.py src\blite_v6\billing\cart_operations.py src\blite_v6\billing\ui_sections.py src\blite_v6\inventory_grocery\billing_inventory_bridge.py src\blite_v6\inventory_grocery\product_form.py src\blite_v6\inventory_grocery\product_units.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_inventory_billing_bridge.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_units.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_billing_unit_visibility.py tests\test_inventory_loose_quantity.py tests\test_loose_quantity_printing.py tests\test_billing_cart_operations.py tests\test_billing_catalog_barcode_ui_smoke.py`
+  - Result: 45 passed.
+- Implemented backend foundation only, keeping Inventory UI wiring for the next slice:
+  - `src/blite_v6/inventory_grocery/purchase_validation.py`
+  - `repositories/purchase_repo.py`
+  - `services_v5/purchase_service.py`
+  - `tests/test_inventory_purchase_foundation.py`
+  - `docs/INVENTORY_GROCERY_PHASE_G5_MANUAL_TEST_CHECKLIST.md`
+- Schema safety:
+  - `v5_vendors` now supports additive `opening_balance`.
+  - `db_core/schema_manager.py` now also adds G2 grocery columns to existing product variant/movement tables when needed.
+  - Fresh schema and backup-first grocery migration include vendor opening balance.
+- Behavior:
+  - Vendor save/upsert supports duplicate-name update.
+  - Purchase invoice save validates vendor, invoice date, item qty/cost/MRP/sale price/GST.
+  - Purchase save stores header/items, increases matching product variant stock, increases matching legacy inventory stock, and writes positive purchase movement rows.
+  - Existing vendor id can be used without retyping vendor details.
+- Verification:
+  - `python -m py_compile repositories\purchase_repo.py services_v5\purchase_service.py src\blite_v6\inventory_grocery\purchase_validation.py db_core\schema_manager.py src\blite_v6\inventory_grocery\schema_migration.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_inventory_purchase_foundation.py tests\test_inventory_grocery_schema_migration.py`
+  - Result: 10 passed.
+  - Combined G3/G4/G5 focused gate after docs:
+    - compile check passed for changed purchase, schema, billing, and inventory modules.
+    - `python -m pytest -q -p no:cacheprovider tests\test_inventory_purchase_foundation.py tests\test_inventory_grocery_schema_migration.py tests\test_inventory_billing_bridge.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_units.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_billing_unit_visibility.py tests\test_inventory_loose_quantity.py tests\test_loose_quantity_printing.py tests\test_billing_cart_operations.py tests\test_billing_catalog_barcode_ui_smoke.py`
+    - Result: 55 passed.
+- Note:
+  - First sandbox test attempt hit Windows temp-folder permission; rerun with approved normal pytest temp access passed.
+
+## 2026-04-30 - GST Settings Blueprint Reminder
+- User reminded that the current Settings -> Bill & GST tab has a single global GST rate that suits salon/spa billing, but grocery/retail needs multiple product GST rates.
+- Blueprint updated to preserve the existing salon/spa behavior while planning a retail-safe product-wise GST model:
+  - Existing `GST Rate %` remains the global/service fallback rate.
+  - Retail/product mode should use Inventory/Product Master GST per item.
+  - Mixed bills should use item GST when available and global GST as fallback.
+  - Settings should add GST calculation mode and missing-item-GST policy instead of replacing the old field.
+  - Print/PDF/WhatsApp/reports should group GST by rate.
+- No runtime behavior changed in this reminder patch.
+
+## 2026-04-30 - Inventory/Grocery Phase G5 UI Slice: Purchase Bill Popup
+- Continued from the G5 backend foundation into first UI wiring.
+- Added:
+  - `src/blite_v6/inventory_grocery/purchase_form.py`
+  - `tests/test_inventory_grocery_purchase_form.py`
+- Updated:
+  - `inventory.py`
+  - `docs/INVENTORY_GROCERY_IMPLEMENTATION_BLUEPRINT.md`
+  - `docs/INVENTORY_GROCERY_PHASE_G5_MANUAL_TEST_CHECKLIST.md`
+- Behavior:
+  - Inventory header/actions now expose `Purchase Bill`.
+  - Purchase popup can use a selected/typed inventory item.
+  - Existing vendors can be selected without blanking saved vendor details.
+  - New vendors can be typed from the purchase popup.
+  - Qty/unit/cost/sale/MRP/GST/HSN/batch/expiry/notes are passed to `PurchaseService`.
+  - Save refreshes Inventory and reselects the purchased item.
+- Deferred:
+  - multi-line purchase bill UI.
+  - purchase invoice reversal/delete.
+  - vendor payable/payment ledger.
+- Verification:
+  - `python -m py_compile inventory.py src\blite_v6\inventory_grocery\purchase_form.py src\blite_v6\inventory_grocery\purchase_validation.py repositories\purchase_repo.py services_v5\purchase_service.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_inventory_grocery_purchase_form.py tests\test_inventory_purchase_foundation.py tests\test_inventory_grocery_schema_migration.py`
+  - Result: 12 passed.
+  - Combined G3/G4/G5 gate after purchase UI wiring:
+    - compile check passed for changed purchase, schema, billing, inventory, bridge, and product-form modules.
+    - `python -m pytest -q -p no:cacheprovider tests\test_inventory_grocery_purchase_form.py tests\test_inventory_purchase_foundation.py tests\test_inventory_grocery_schema_migration.py tests\test_inventory_billing_bridge.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_units.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_billing_unit_visibility.py tests\test_inventory_loose_quantity.py tests\test_loose_quantity_printing.py tests\test_billing_cart_operations.py tests\test_billing_catalog_barcode_ui_smoke.py`
+    - Result: 57 passed.
+
+## 2026-04-30 - Inventory/Grocery Phase G5 UI Follow-up: Purchase Popup Sizing
+- User screenshot showed the first Purchase Bill popup did not fully show bottom fields/actions until manually resized.
+- Root cause:
+  - The first UI slice used a fixed body frame without the Add Item dialog's scrollable/pinned-footer pattern.
+- Fix:
+  - Purchase popup now opens at `900x780`, min size `760x640`, and is resizable.
+  - Save/Cancel footer is packed at the bottom before the scrollable form body, so it stays visible.
+  - Main form body is scrollable.
+  - Mouse-wheel scroll is bound over entry fields, vendor/item comboboxes, notes, and the window.
+- Verification:
+  - `python -m py_compile inventory.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_inventory_purchase_ui_smoke.py tests\test_inventory_grocery_purchase_form.py tests\test_inventory_purchase_foundation.py`
+  - Result: 7 passed.
+  - Combined G3/G4/G5 gate after sizing fix:
+    - compile check passed for changed purchase, schema, billing, inventory, bridge, and product-form modules.
+    - `python -m pytest -q -p no:cacheprovider tests\test_inventory_purchase_ui_smoke.py tests\test_inventory_grocery_purchase_form.py tests\test_inventory_purchase_foundation.py tests\test_inventory_grocery_schema_migration.py tests\test_inventory_billing_bridge.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_units.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_billing_unit_visibility.py tests\test_inventory_loose_quantity.py tests\test_loose_quantity_printing.py tests\test_billing_cart_operations.py tests\test_billing_catalog_barcode_ui_smoke.py`
+    - Result: 58 passed.
+
+## 2026-04-30 - Inventory/Grocery Phase G6A: Import Parser/Validator/Preview
+- User approved starting G6A only: parser + validator + preview tests, no UI/apply step yet.
+- Added:
+  - `src/blite_v6/inventory_grocery/product_import.py`
+  - `tests/test_inventory_grocery_product_import.py`
+- Scope:
+  - CSV parser.
+  - JSON parser.
+  - XLSX parser through `openpyxl`.
+  - Supplier-style column auto-mapping.
+  - Preview rows with actions: `create`, `update`, `skip`, `error`.
+  - Required field validation for product name, category, sale price.
+  - Product validation reuse for unit, GST, stock, price, MRP, barcode/SKU.
+  - Existing item matching by barcode first, SKU second, exact name third.
+  - Duplicate barcode/SKU/name detection inside a file.
+  - Below-cost row warning by default, with policy to error or allow.
+- Safety:
+  - G6A performs no inventory/catalog writes.
+  - Import apply and UI are deferred to G6B/G6C.
+- Edge case fixed during tests:
+  - Column mapping now scans headers across all rows, not only the first row, so uneven supplier rows do not lose later columns.
+- Verification:
+  - `python -m py_compile src\blite_v6\inventory_grocery\product_import.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_inventory_grocery_product_import.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_validation.py`
+  - Result: 19 passed.
+  - Combined G3/G4/G5/G6A gate:
+    - compile check passed for import, purchase, schema, billing, inventory, bridge, and product-form modules.
+    - `python -m pytest -q -p no:cacheprovider tests\test_inventory_grocery_product_import.py tests\test_inventory_purchase_ui_smoke.py tests\test_inventory_grocery_purchase_form.py tests\test_inventory_purchase_foundation.py tests\test_inventory_grocery_schema_migration.py tests\test_inventory_billing_bridge.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_units.py tests\test_inventory_grocery_product_validation.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_billing_unit_visibility.py tests\test_inventory_loose_quantity.py tests\test_loose_quantity_printing.py tests\test_billing_cart_operations.py tests\test_billing_catalog_barcode_ui_smoke.py`
+    - Result: 72 passed.
+
+## 2026-04-30 - Inventory/Grocery Phase G6B: Import Preview Popup
+- User requested G6B: Inventory import popup with file picker, column mapping review, and preview grid.
+- Added:
+  - `src/blite_v6/inventory_grocery/product_import_dialog.py`
+  - `tests/test_inventory_import_ui_smoke.py`
+  - `docs/INVENTORY_GROCERY_PHASE_G6_MANUAL_TEST_CHECKLIST.md`
+- Updated:
+  - `inventory.py`
+  - `docs/INVENTORY_GROCERY_IMPLEMENTATION_BLUEPRINT.md`
+- Behavior:
+  - Inventory header/actions now expose `Import`.
+  - Popup can choose `.csv`, `.xlsx`, or `.json` file.
+  - Supplier columns are auto-mapped, then user can adjust mapping dropdowns.
+  - Required/common fields are shown in the mapping grid:
+    - product name, category, sale price, cost, opening stock, unit, barcode, SKU, GST, HSN/SAC, MRP, brand.
+  - Existing-item policy can be selected: skip/update/error.
+  - Below-cost policy can be selected: warn/error/allow.
+  - Preview grid shows row, action, item, category, price, issues.
+- Safety:
+  - G6B is preview-only.
+  - No inventory save, product catalog sync, or import apply path is wired yet.
+  - Follow-up split after manual screenshot review moved the preview popup UI into `product_import_dialog.py`.
+  - `inventory.py` now keeps only button wiring and a thin `_import_dialog()` opener, reducing it from about 1871 lines to 1646 lines before G6C.
+  - Test temp-file handling was adjusted to avoid the local Windows temp ACL issue seen under `C:\Users\bijil\AppData\Local\Temp\pytest-of-bijil`.
+- Verification:
+  - `python -m py_compile inventory.py src\blite_v6\inventory_grocery\product_import.py src\blite_v6\inventory_grocery\product_import_dialog.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_inventory_import_ui_smoke.py tests\test_inventory_grocery_product_import.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_validation.py`
+  - Result: 21 passed.
+  - After split:
+    - `python -m pytest -q -p no:cacheprovider tests\test_inventory_import_ui_smoke.py tests\test_inventory_grocery_product_import.py`
+    - Result: 11 passed.
+  - Combined G3/G4/G5/G6 gate:
+    - compile check passed for import, purchase, schema, billing, inventory, bridge, and product-form modules.
+    - `python -m pytest -q -p no:cacheprovider tests\test_inventory_import_ui_smoke.py tests\test_inventory_grocery_product_import.py tests\test_inventory_purchase_ui_smoke.py tests\test_inventory_grocery_purchase_form.py tests\test_inventory_purchase_foundation.py tests\test_inventory_grocery_schema_migration.py tests\test_inventory_billing_bridge.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_units.py tests\test_inventory_grocery_product_validation.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_billing_unit_visibility.py tests\test_inventory_loose_quantity.py tests\test_loose_quantity_printing.py tests\test_billing_cart_operations.py tests\test_billing_catalog_barcode_ui_smoke.py`
+    - Result: 74 passed.
+
+## 2026-04-30 - Inventory/Grocery Phase G6C: Import Apply Engine
+- User requested G6C and reminded that large files must not grow with new feature logic.
+- Added:
+  - `src/blite_v6/inventory_grocery/product_import_apply.py`
+  - `tests/test_inventory_grocery_product_import_apply.py`
+  - `docs/manual_test_samples/g6c_product_import_sample.csv`
+- Updated:
+  - `src/blite_v6/inventory_grocery/product_import_dialog.py`
+  - `inventory.py`
+  - `tests/test_inventory_import_ui_smoke.py`
+  - `docs/INVENTORY_GROCERY_IMPLEMENTATION_BLUEPRINT.md`
+  - `docs/INVENTORY_GROCERY_PHASE_G6_MANUAL_TEST_CHECKLIST.md`
+- Behavior:
+  - Import popup remains preview-first.
+  - `Import Valid Rows` applies only preview rows marked `create` or `update`.
+  - `skip` and `error` rows are left untouched.
+  - Duplicate/update policy continues to come from the preview step.
+  - Updates match by barcode, SKU, or exact item name.
+  - If an update changes the product name, the old inventory key is removed to avoid duplicate rows.
+  - Inventory is saved once per import batch.
+  - Product catalog sync runs after inventory save so Billing Products can see imported products.
+  - Import batch summary is appended to `inventory_import_batches.json`.
+  - Popup refreshes Inventory after import and shows created/updated/skipped/error counts plus batch id.
+- Large-file guard:
+  - `inventory.py` only gained thin wiring for `save_inventory_fn` and refresh callback.
+  - Line counts after G6C:
+    - `inventory.py`: 1651
+    - `product_import_dialog.py`: 408
+    - `product_import_apply.py`: 212
+- Verification:
+  - Focused G6C:
+    - `python -m py_compile inventory.py src\blite_v6\inventory_grocery\product_import.py src\blite_v6\inventory_grocery\product_import_apply.py src\blite_v6\inventory_grocery\product_import_dialog.py tests\test_inventory_grocery_product_import_apply.py tests\test_inventory_import_ui_smoke.py`
+    - `python -m pytest -q -p no:cacheprovider tests\test_inventory_grocery_product_import_apply.py tests\test_inventory_import_ui_smoke.py tests\test_inventory_grocery_product_import.py`
+    - Result: 17 passed.
+  - Combined G3/G4/G5/G6 gate:
+    - compile check passed for import apply, import dialog, import parser, inventory, purchase, schema, billing, bridge, and product-form modules.
+    - `python -m pytest -q -p no:cacheprovider tests\test_inventory_grocery_product_import_apply.py tests\test_inventory_import_ui_smoke.py tests\test_inventory_grocery_product_import.py tests\test_inventory_purchase_ui_smoke.py tests\test_inventory_grocery_purchase_form.py tests\test_inventory_purchase_foundation.py tests\test_inventory_grocery_schema_migration.py tests\test_inventory_billing_bridge.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_units.py tests\test_inventory_grocery_product_validation.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_billing_unit_visibility.py tests\test_inventory_loose_quantity.py tests\test_loose_quantity_printing.py tests\test_billing_cart_operations.py tests\test_billing_catalog_barcode_ui_smoke.py`
+    - Result: 81 passed.
+- Manual smoke required before G7:
+  - Source-mode import apply with a small CSV/XLSX/JSON file.
+  - Confirm imported products appear in Inventory and Billing search/category after source restart.
+
+## 2026-04-30 - Inventory/Grocery Phase G6C Manual UX Follow-up
+- User manual screenshots showed:
+  - Import succeeded, but the popup stayed open and immediately re-previewed imported rows as `SKIP`, making success look uncertain.
+  - The first-open import popup clipped the right-side Browse button/header area at current screen size.
+- Clarification:
+  - The screenshot with `Created: 2` confirmed import success.
+  - After import, the same file preview showed `SKIP` because those products now existed and the policy was `skip`.
+- Fix:
+  - On a clean import with zero errors, show the success summary and close the popup.
+  - Do not re-preview imported rows after a clean success.
+  - Keep the popup open only when there are import errors/issues.
+  - Changed the file picker row from pack layout to grid layout so the Browse button stays visible.
+  - Changed column mapping from 3 columns to 2 columns to avoid horizontal clipping at smaller popup widths.
+  - Shortened preview helper text to `Preview before import`.
+- Verification:
+  - `python -m py_compile src\blite_v6\inventory_grocery\product_import_dialog.py tests\test_inventory_import_ui_smoke.py`
+  - `python -m pytest -q -p no:cacheprovider tests\test_inventory_import_ui_smoke.py tests\test_inventory_grocery_product_import_apply.py tests\test_inventory_grocery_product_import.py`
+  - Result: 18 passed.
+  - Combined G3/G4/G5/G6 gate:
+    - `python -m pytest -q -p no:cacheprovider tests\test_inventory_grocery_product_import_apply.py tests\test_inventory_import_ui_smoke.py tests\test_inventory_grocery_product_import.py tests\test_inventory_purchase_ui_smoke.py tests\test_inventory_grocery_purchase_form.py tests\test_inventory_purchase_foundation.py tests\test_inventory_grocery_schema_migration.py tests\test_inventory_billing_bridge.py tests\test_inventory_grocery_product_form.py tests\test_inventory_grocery_product_units.py tests\test_inventory_grocery_product_validation.py tests\test_billing_product_unit_metadata.py tests\test_billing_catalog_search.py tests\test_billing_unit_visibility.py tests\test_inventory_loose_quantity.py tests\test_loose_quantity_printing.py tests\test_billing_cart_operations.py tests\test_billing_catalog_barcode_ui_smoke.py`
+    - Result: 81 passed.
+
+## 2026-05-01 - Inventory/Grocery Phase G10A: Reports / Closing Retail Summary
+- User requested G10 reports/closing integration and reminded to follow master rules.
+- Added:
+  - `src/blite_v6/reports/retail_summary.py`
+  - `tests/test_reports_retail_summary.py`
+- Updated:
+  - `closing_report.py`
+  - `repositories/reports_repo.py`
+  - `tests/test_reports_final_integration_smoke.py`
+- Behavior:
+  - Daily closing summary now uses a focused report summary module instead of local item parsing.
+  - Grocery/product sales are included in closing summary data and PDF output.
+  - Decimal product quantities are preserved; the old closing parser used integer quantity for services only.
+  - Closing PDF now separates Gross Sales, Total Discount, and Net Revenue so line sales and saved bill totals reconcile cleanly.
+  - Closing PDF now includes service sales, product sales, GST total, top products, and GST summary where data is available.
+  - Report DB rows expose `gst_amount` and `taxable_amount` for future report screens and closing summaries.
+  - Legacy four-field item strings still parse safely; future richer product strings with unit, GST rate, cost, and category also parse.
+- Large-file guard:
+  - New aggregation/math lives in `src/blite_v6/reports/retail_summary.py`.
+  - `closing_report.py` received only report query fields and PDF wiring to the new summary module.
+  - Current line counts:
+    - `closing_report.py`: 867
+    - `src/blite_v6/reports/retail_summary.py`: 270
+    - `repositories/reports_repo.py`: 117
+- Verification:
+  - `python -m py_compile closing_report.py repositories\reports_repo.py src\blite_v6\reports\retail_summary.py`
+  - `python -m pytest -q -p no:cacheprovider tests/test_reports_retail_summary.py tests/test_reports_service_report.py tests/test_reports_bill_text.py tests/test_reports_final_integration_smoke.py`
+  - Result: 19 passed.
+- Manual smoke required before G10B:
+  - Create a bill with one service and one grocery/loose product, then save.
+  - Open Closing Report for that date and save PDF.
+  - Confirm PDF shows Gross Revenue, Service Sales, Product Sales, GST Total, Top Services, Top Products, Bill List, and Expenses if any.
+
+## 2026-05-01 - Inventory/Grocery Phase G10B: Grocery Reports UI and Production Blueprint
+- User requested grocery reports UI with day/week/month filters and a production-readiness blueprint update.
+- Added:
+  - `src/blite_v6/reports/grocery_report_view.py`
+  - `tests/test_reports_grocery_report_view.py`
+- Updated:
+  - `reports.py`
+  - `tests/test_reports_final_integration_smoke.py`
+  - `docs/INVENTORY_GROCERY_IMPLEMENTATION_BLUEPRINT.md`
+  - `docs/UNIVERSAL_RETAIL_GROCERY_BLUEPRINT.md`
+- Behavior:
+  - Reports screen now includes a `Grocery Reports` tab.
+  - Quick filters: Today, This Week, This Month.
+  - Custom from/to date filter remains available.
+  - Summary cards show Gross Sales, Net Revenue, Product Sales, Discount, GST, and Bills.
+  - Product table shows quantity, unit, revenue, cost, and margin.
+  - GST table shows rate-wise taxable, GST, and gross amounts where report data provides GST detail.
+- Large-file guard:
+  - New UI panel and period logic live in `src/blite_v6/reports/grocery_report_view.py`.
+  - `reports.py` received only a thin import, tab creation, and panel mount.
+- Production readiness notes:
+  - Blueprint now tracks remaining release work: full automated gate, source smoke, EXE rebuild/reinstall smoke, license activation smoke, print/PDF/WhatsApp smoke, clean-install sample-data policy, optional graphical dashboard, wrapper-size audit, and data safety audit.
+- Verification:
+  - `python -m py_compile reports.py closing_report.py src\blite_v6\reports\grocery_report_view.py src\blite_v6\reports\retail_summary.py`
+  - `python -m pytest -q -p no:cacheprovider tests/test_reports_grocery_report_view.py tests/test_reports_retail_summary.py tests/test_reports_service_report.py tests/test_reports_bill_text.py tests/test_reports_final_integration_smoke.py`
+  - Result: 21 passed.
+  - Broad grocery/report/billing/settings gate:
+    - `python -m pytest -q -p no:cacheprovider tests/test_reports_grocery_report_view.py tests/test_reports_retail_summary.py tests/test_reports_service_report.py tests/test_reports_bill_text.py tests/test_reports_final_integration_smoke.py tests/test_reports_chart_data.py tests/test_reports_view_model.py tests/test_billing_gst_breakdown.py tests/test_billing_totals.py tests/test_billing_product_unit_metadata.py tests/test_billing_catalog_search.py tests/test_billing_unit_visibility.py tests/test_billing_sale_margin_alerts.py tests/test_inventory_billing_bridge.py tests/test_inventory_grocery_product_form.py tests/test_inventory_grocery_product_import.py tests/test_inventory_grocery_product_import_apply.py tests/test_inventory_grocery_purchase_form.py tests/test_inventory_purchase_foundation.py tests/test_inventory_purchase_ui_smoke.py tests/test_settings_gst_master.py tests/test_settings_gst_classification_master.py`
+    - Result: 103 passed.
+  - Full automated gate:
+    - `python -m pytest -q -p no:cacheprovider tests`
+    - Initial run found one old settings test still using the previous preference payload signature.
+    - Fixed `src/blite_v6/settings/preferences.py` to default `show_below_cost_alert=True` for backward-compatible callers.
+    - Final result: 367 passed.
+- Manual smoke required:
+  - Reports -> Grocery Reports.
+  - Test Today, This Week, This Month.
+  - Confirm cards and product/GST tables update without PDF export.

@@ -1,0 +1,29 @@
+[
+  {
+    "name": "Silver Package (1 Month)",
+    "price": 1500,
+    "duration_days": 30,
+    "discount_pct": 10,
+    "wallet": 0,
+    "description": "10% off all services for 1 month",
+    "active": true
+  },
+  {
+    "name": "Gold Package (3 Months)",
+    "price": 4000,
+    "duration_days": 90,
+    "discount_pct": 15,
+    "wallet": 0,
+    "description": "15% off all services for 3 months",
+    "active": true
+  },
+  {
+    "name": "Platinum Package (6 Months)",
+    "price": 7000,
+    "duration_days": 180,
+    "discount_pct": 20,
+    "wallet": 0,
+    "description": "20% off all services for 6 months",
+    "active": true
+  }
+]

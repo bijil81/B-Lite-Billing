@@ -1,0 +1,82 @@
+[
+  {
+    "name": "Silver Package (1 Month)",
+    "price": 1500,
+    "duration_days": 30,
+    "discount_pct": 10,
+    "wallet": 0,
+    "description": "10% off all services for 1 month"
+  },
+  {
+    "name": "Gold Package (3 Months)",
+    "price": 4000,
+    "duration_days": 90,
+    "discount_pct": 15,
+    "wallet": 0,
+    "description": "15% off all services for 3 months"
+  },
+  {
+    "name": "Platinum Package (6 Months)",
+    "price": 7000,
+    "duration_days": 180,
+    "discount_pct": 20,
+    "wallet": 0,
+    "description": "20% off all services for 6 months"
+  },
+  {
+    "name": "Diamond Package (1 Year)",
+    "price": 12000,
+    "duration_days": 365,
+    "discount_pct": 25,
+    "wallet": 0,
+    "description": "25% off all services for 1 full year"
+  },
+  {
+    "name": "Prepaid Wallet ₹1000",
+    "price": 1000,
+    "duration_days": 365,
+    "discount_pct": 0,
+    "wallet": 1100,
+    "description": "Pay ₹1000, get ₹1100 wallet credit (₹100 bonus)"
+  },
+  {
+    "name": "Prepaid Wallet ₹2000",
+    "price": 2000,
+    "duration_days": 365,
+    "discount_pct": 0,
+    "wallet": 2200,
+    "description": "Pay ₹2000, get ₹2200 wallet credit (₹200 bonus)"
+  },
+  {
+    "name": "Prepaid Wallet ₹5000",
+    "price": 5000,
+    "duration_days": 365,
+    "discount_pct": 0,
+    "wallet": 5750,
+    "description": "Pay ₹5000, get ₹5750 wallet credit (₹750 bonus)"
+  },
+  {
+    "name": "Student Package (1 Month)",
+    "price": 800,
+    "duration_days": 30,
+    "discount_pct": 8,
+    "wallet": 0,
+    "description": "8% off for students — valid student ID required"
+  },
+  {
+    "name": "Bridal Package (3 Months)",
+    "price": 9000,
+    "duration_days": 90,
+    "discount_pct": 20,
+    "wallet": 500,
+    "description": "20% off + ₹500 wallet for bridal services — 3 months"
+  },
+  {
+    "name": "VIP Annual Package",
+    "price": 15000,
+    "duration_days": 365,
+    "discount_pct": 30,
+    "wallet": 1000,
+    "description": "30% off all services + ₹1000 wallet credit — full year VIP"
+  }
+]

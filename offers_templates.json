@@ -1,0 +1,112 @@
+[
+  {
+    "name": "Welcome Discount",
+    "type": "percentage",
+    "value": 10.0,
+    "service_name": "",
+    "coupon_code": "WELCOME10",
+    "valid_from": "2026-01-01",
+    "valid_to": "2026-12-31",
+    "description": "10% off for new customers — first visit",
+    "active": true
+  },
+  {
+    "name": "Flat ₹100 Off",
+    "type": "flat",
+    "value": 100.0,
+    "service_name": "",
+    "coupon_code": "SAVE100",
+    "valid_from": "2026-01-01",
+    "valid_to": "2026-12-31",
+    "description": "₹100 off on any bill above ₹500",
+    "active": true
+  },
+  {
+    "name": "Onam Special 20%",
+    "type": "percentage",
+    "value": 20.0,
+    "service_name": "",
+    "coupon_code": "ONAM20",
+    "valid_from": "2026-09-01",
+    "valid_to": "2026-09-30",
+    "description": "20% off all services during Onam season",
+    "active": false
+  },
+  {
+    "name": "Facial Special 15%",
+    "type": "service_wise",
+    "value": 15.0,
+    "service_name": "Facial",
+    "coupon_code": "FACIAL15",
+    "valid_from": "2026-01-01",
+    "valid_to": "2026-12-31",
+    "description": "15% off on all Facial services",
+    "active": true
+  },
+  {
+    "name": "Hair Spa Discount",
+    "type": "service_wise",
+    "value": 10.0,
+    "service_name": "Hair Spa",
+    "coupon_code": "HAIRSPA10",
+    "valid_from": "2026-01-01",
+    "valid_to": "2026-12-31",
+    "description": "10% off on Hair Spa services",
+    "active": true
+  },
+  {
+    "name": "Birthday Month Special",
+    "type": "percentage",
+    "value": 25.0,
+    "service_name": "",
+    "coupon_code": "BDAY25",
+    "valid_from": "2026-01-01",
+    "valid_to": "2026-12-31",
+    "description": "25% off for customers in their birthday month",
+    "active": true
+  },
+  {
+    "name": "Weekend Offer ₹150 Off",
+    "type": "flat",
+    "value": 150.0,
+    "service_name": "",
+    "coupon_code": "WEEKEND150",
+    "valid_from": "2026-01-01",
+    "valid_to": "2026-06-30",
+    "description": "₹150 off on weekends only",
+    "active": true
+  },
+  {
+    "name": "Summer Sale 15%",
+    "type": "percentage",
+    "value": 15.0,
+    "service_name": "",
+    "coupon_code": "SUMMER15",
+    "valid_from": "2026-04-01",
+    "valid_to": "2026-06-30",
+    "description": "15% off all services in summer months",
+    "active": false
+  },
+  {
+    "name": "Waxing Combo Offer",
+    "type": "service_wise",
+    "value": 12.0,
+    "service_name": "Waxing",
+    "coupon_code": "WAX12",
+    "valid_from": "2026-01-01",
+    "valid_to": "2026-12-31",
+    "description": "12% off on all Waxing services",
+    "active": true
+  },
+  {
+    "name": "Referral Bonus ₹200",
+    "type": "flat",
+    "value": 200.0,
+    "service_name": "",
+    "coupon_code": "REFER200",
+    "valid_from": "2026-01-01",
+    "valid_to": "2026-12-31",
+    "description": "₹200 off when you refer a new customer",
+    "active": true
+  }
+]

@@ -1,0 +1,14 @@
+Pillow>=11.2,<12
+reportlab>=4.2,<5
+selenium>=4.33,<5
+webdriver-manager>=4.0,<5
+openpyxl>=3.1,<4
+bcrypt>=4.2,<5
+pywhatkit>=5.4,<6
+pywin32>=311; platform_system == "Windows"
+Flask>=3.1,<4
+keyring>=25.6,<26
+openai>=1.57,<2
+anthropic>=0.40,<1
+requests>=2.32,<3
+matplotlib>=3.9,<4

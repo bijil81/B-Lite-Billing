@@ -1,0 +1,122 @@
+{
+  "BLITE-GIFT1": {
+    "discount_type": "flat",
+    "value": 200.0,
+    "phone": "",
+    "name": "Sample Gift Code",
+    "expiry": "2026-12-31",
+    "note": "Gift voucher - ₹200 off",
+    "used": false,
+    "used_on": "",
+    "used_invoice": "",
+    "created": "2026-01-01 10:00"
+  },
+  "BLITE-LOYAL": {
+    "discount_type": "flat",
+    "value": 150.0,
+    "phone": "",
+    "name": "Loyalty Reward",
+    "expiry": "2026-12-31",
+    "note": "Loyalty reward code - ₹150 off",
+    "used": false,
+    "used_on": "",
+    "used_invoice": "",
+    "created": "2026-01-01 10:00"
+  },
+  "BLITE-FEST1": {
+    "discount_type": "percentage",
+    "value": 15.0,
+    "phone": "",
+    "name": "Festival Special",
+    "expiry": "2026-12-31",
+    "note": "Festival offer - 15% off",
+    "used": false,
+    "used_on": "",
+    "used_invoice": "",
+    "created": "2026-01-01 10:00"
+  },
+  "BLITE-VIP01": {
+    "discount_type": "percentage",
+    "value": 20.0,
+    "phone": "",
+    "name": "VIP Customer Code",
+    "expiry": "2026-12-31",
+    "note": "VIP exclusive - 20% off",
+    "used": false,
+    "used_on": "",
+    "used_invoice": "",
+    "created": "2026-01-01 10:00"
+  },
+  "BLITE-BDAY1": {
+    "discount_type": "flat",
+    "value": 300.0,
+    "phone": "",
+    "name": "Birthday Gift",
+    "expiry": "2026-12-31",
+    "note": "Happy Birthday! ₹300 off",
+    "used": false,
+    "used_on": "",
+    "used_invoice": "",
+    "created": "2026-01-01 10:00"
+  },
+  "BLITE-NEW01": {
+    "discount_type": "flat",
+    "value": 100.0,
+    "phone": "",
+    "name": "New Customer Welcome",
+    "expiry": "2026-12-31",
+    "note": "Welcome code for new customers",
+    "used": false,
+    "used_on": "",
+    "used_invoice": "",
+    "created": "2026-01-01 10:00"
+  },
+  "BLITE-REFER": {
+    "discount_type": "flat",
+    "value": 200.0,
+    "phone": "",
+    "name": "Referral Reward",
+    "expiry": "2026-12-31",
+    "note": "Referral bonus - ₹200 off",
+    "used": false,
+    "used_on": "",
+    "used_invoice": "",
+    "created": "2026-01-01 10:00"
+  },
+  "BLITE-HALF1": {
+    "discount_type": "percentage",
+    "value": 50.0,
+    "phone": "",
+    "name": "Half Price Special",
+    "expiry": "2026-06-30",
+    "note": "Special 50% off code - limited use",
+    "used": false,
+    "used_on": "",
+    "used_invoice": "",
+    "created": "2026-01-01 10:00"
+  },
+  "BLITE-BRDE1": {
+    "discount_type": "flat",
+    "value": 500.0,
+    "phone": "",
+    "name": "Bridal Discount",
+    "expiry": "2026-12-31",
+    "note": "Bridal package discount - ₹500 off",
+    "used": false,
+    "used_on": "",
+    "used_invoice": "",
+    "created": "2026-01-01 10:00"
+  },
+  "BLITE-XMAS1": {
+    "discount_type": "percentage",
+    "value": 25.0,
+    "phone": "",
+    "name": "Christmas Special",
+    "expiry": "2026-12-31",
+    "note": "Christmas & New Year special - 25% off",
+    "used": false,
+    "used_on": "",
+    "used_invoice": "",
+    "created": "2026-01-01 10:00"
+  }
+}
