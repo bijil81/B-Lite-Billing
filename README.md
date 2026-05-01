@@ -60,4 +60,20 @@ Work in progress – production hardening ongoing.
 !\[Inventory](docs/screens/inventory.png)
 
 !\[Billing](docs/screens/billing.png)
+# B-Lite Billing
+
+A desktop billing software for salons.
+
+## Features
+- Billing system
+- Inventory management
+- GST support
+- Reports
+- WhatsApp integration
+
+## Installation
+pip install -r requirements.txt
+
+## Run
+python main.py
 
