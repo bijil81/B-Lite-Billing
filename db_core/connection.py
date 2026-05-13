@@ -15,27 +15,28 @@ from contextlib import contextmanager
 from db import DB_PATH
 
 
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    return conn
+from db import get_db
 
+def get_connection() -> sqlite3.Connection:
+    """Return the shared thread-local connection from db.py."""
+    return get_db()
 
 @contextmanager
 def connection_scope():
+    """
+    Provides a connection scope that shares the db.py connection.
+    It commits and rolls back ONLY if it's not inside a db_transaction.
+    """
     conn = get_connection()
+    # Check if managed by db.py db_transaction
+    from db import _local
+    is_managed = getattr(_local, "in_transaction", False)
+
     try:
         yield conn
-        conn.commit()
+        if not is_managed:
+            conn.commit()
     except Exception:
-        conn.rollback()
+        if not is_managed:
+            conn.rollback()
         raise
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass

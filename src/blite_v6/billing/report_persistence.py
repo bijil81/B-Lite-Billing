@@ -5,6 +5,9 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from db import db_transaction
+from src.blite_v6.billing.wallet_payment import build_payment_split, build_wallet_preview
+
 
 LogFn = Callable[[str], None]
 NowFn = Callable[[], str]
@@ -39,7 +42,11 @@ class SaveLegacyReportDependencies:
 def format_items_for_legacy_csv(items: list[dict[str, Any]]) -> str:
     segments = []
     for it in items:
-        base = [it["mode"], it["name"], it["price"], it["qty"]]
+        mode = "due_clearance" if (
+            it.get("is_due_clearance")
+            or str(it.get("name", "")).strip().lower() == "previous due clearance"
+        ) else it["mode"]
+        base = [mode, it["name"], it["price"], it["qty"]]
         rich = [
             it.get("unit_type") or it.get("unit") or "",
             it.get("gst_rate", ""),
@@ -67,6 +74,24 @@ def build_invoice_payload(
     customer_name = frame.name_ent.get().strip()
     billed_by = frame.app.current_user.get("username", "") if getattr(frame.app, "current_user", None) else ""
     total_discount = disc + mem_disc + pts_disc + offer_disc + redeem_disc
+    due_clearance_amount = round(sum(
+        float(it.get("price", 0.0) or 0.0) * float(it.get("qty", 1.0) or 1.0)
+        for it in frame.bill_items
+        if it.get("is_due_clearance") or str(it.get("name", "")).strip().lower() == "previous due clearance"
+    ), 2)
+    sale_net_total = max(0.0, round(final - due_clearance_amount, 2))
+
+    try:
+        amt_paid = float(frame.amount_paid_var.get())
+    except Exception:
+        amt_paid = round(final, 2)
+    wallet_preview = build_wallet_preview(
+        enabled=bool(getattr(frame, "use_wallet_var", None) and frame.use_wallet_var.get()),
+        available=getattr(frame, "_membership_wallet_available", 0.0),
+        payable_before_wallet=final,
+        requested_amount=getattr(frame, "wallet_amount_var", None).get() if getattr(frame, "wallet_amount_var", None) else None,
+    )
+    amt_paid = max(0.0, min(float(amt_paid or 0.0), wallet_preview.payable))
 
     return {
         "invoice_no": frame._current_invoice,
@@ -77,7 +102,7 @@ def build_invoice_payload(
         "discount_total": round(total_discount, 2),
         "tax_total": 0.0,
         "net_total": round(final, 2),
-        "loyalty_earned": int(final // 100),
+        "loyalty_earned": int(sale_net_total // 100),
         "loyalty_redeemed": int(max(0.0, pts_disc)),
         "redeem_code": frame._applied_redeem_code or "",
         "redeem_discount": round(redeem_disc, 2),
@@ -86,7 +111,11 @@ def build_invoice_payload(
         "items": [
             {
                 "item_name": it["name"],
-                "item_type": "product" if it.get("mode") == "products" else "service",
+                "item_type": (
+                    "due_clearance"
+                    if it.get("is_due_clearance") or str(it.get("name", "")).strip().lower() == "previous due clearance"
+                    else ("product" if it.get("mode") == "products" else "service")
+                ),
                 "staff_name": it.get("staff", ""),
                 "qty": it.get("qty", 1),
                 "unit_price": it.get("price", 0),
@@ -100,11 +129,14 @@ def build_invoice_payload(
             }
             for it in frame.bill_items
         ],
-        "payments": [{
-            "payment_method": frame.payment_var.get(),
-            "amount": round(final, 2),
-            "reference_no": "",
-        }],
+        "payments": build_payment_split(
+            payment_method=frame.payment_var.get(),
+            payable_after_wallet=amt_paid,
+            wallet_used=wallet_preview.used,
+        ),
+        "wallet_used": wallet_preview.used,
+        "wallet_balance_after": wallet_preview.balance_after,
+        "override_blacklist": getattr(frame, "_override_blacklist", False),
     }
 
 
@@ -156,27 +188,65 @@ def save_report_v5_core(
     if frame._current_invoice in getattr(frame, "_saved_invoices", set()):
         return
 
+    if hasattr(frame, "_ensure_unique_invoice_no"):
+        frame._ensure_unique_invoice_no()
+
     items_str = format_items_for_legacy_csv(frame.bill_items)
     customer_phone = frame.phone_ent.get().strip()
     customer_name = frame.name_ent.get().strip()
     birthday = frame.bday_ent.get().strip() if hasattr(frame, "bday_ent") else ""
     total_discount = disc + mem_disc + pts_disc + offer_disc + redeem_disc
 
-    deps.auto_save_customer(customer_phone, customer_name, birthday)
+    with db_transaction():
+        deps.auto_save_customer(customer_phone, customer_name, birthday)
 
-    result = deps.finalize_invoice(build_invoice_payload(
-        frame,
-        final=final,
-        disc=disc,
-        pts_disc=pts_disc,
-        offer_disc=offer_disc,
-        redeem_disc=redeem_disc,
-        mem_disc=mem_disc,
-        now=deps.now,
-    ))
+    result = None
+    for attempt in range(3):
+        try:
+            result = deps.finalize_invoice(build_invoice_payload(
+                frame,
+                final=final,
+                disc=disc,
+                pts_disc=pts_disc,
+                offer_disc=offer_disc,
+                redeem_disc=redeem_disc,
+                mem_disc=mem_disc,
+                now=deps.now,
+            ))
+            break
+        except Exception as exc:
+            if "UNIQUE constraint failed" not in str(exc) or "invoice_no" not in str(exc):
+                raise
+            if attempt >= 2:
+                raise
+            deps.app_log(f"[billing v5 invoice retry] duplicate invoice={frame._current_invoice}")
+            try:
+                from utils import next_invoice
+
+                frame._current_invoice = next_invoice()
+                if hasattr(frame, "inv_lbl"):
+                    frame.inv_lbl.config(text=f"  {frame._current_invoice}")
+                if hasattr(frame, "_ensure_unique_invoice_no"):
+                    frame._ensure_unique_invoice_no()
+            except Exception:
+                raise exc
+
     if not bool((result or {}).get("ok", False)):
         raise RuntimeError(f"Invoice save failed for {frame._current_invoice}")
 
+    if not deps.use_v5_customers_db():
+        if customer_phone and customer_phone not in ("0000000000", ""):
+            deps.record_visit(customer_phone, frame._current_invoice, frame.bill_items, final, frame.payment_var.get())
+        if frame.use_pts_var.get() and pts_disc > 0:
+            deps.redeem_points(customer_phone, int(max(0.0, pts_disc)))
+
+    if frame._applied_redeem_code:
+        try:
+            deps.apply_redeem_code(frame._applied_redeem_code, frame._current_invoice, customer_phone=customer_phone)
+        except Exception as e:
+            deps.app_log(f"[billing v5 redeem mirror] invoice={frame._current_invoice} error={e}")
+
+    # These non-transactional actions happen only if the DB transaction successfully commits
     mirror_invoice_to_csv(
         report_path=report_path,
         invoice_no=frame._current_invoice,
@@ -190,18 +260,6 @@ def save_report_v5_core(
         app_log=deps.app_log,
     )
 
-    if not deps.use_v5_customers_db():
-        if customer_phone and customer_phone not in ("0000000000", ""):
-            deps.record_visit(customer_phone, frame._current_invoice, frame.bill_items, final, frame.payment_var.get())
-        if frame.use_pts_var.get() and pts_disc > 0:
-            deps.redeem_points(customer_phone, int(max(0.0, pts_disc)))
-
-    if frame._applied_redeem_code:
-        try:
-            deps.apply_redeem_code(frame._applied_redeem_code, frame._current_invoice, customer_phone=customer_phone)
-        except Exception:
-            pass
-
     try:
         deps.auto_sync()
     except Exception:
@@ -209,6 +267,13 @@ def save_report_v5_core(
 
     frame._saved_invoices.add(frame._current_invoice)
     frame._bill_completed = True
+
+    if result and "credit_warning" in result:
+        try:
+            from tkinter import messagebox
+            messagebox.showwarning("Credit Limit", result["credit_warning"])
+        except Exception:
+            pass
 
     try:
         billed_by = frame.app.current_user.get("username", "") if getattr(frame.app, "current_user", None) else ""
@@ -248,54 +313,95 @@ def save_report_legacy_core(
 ) -> None:
     if frame._current_invoice in getattr(frame, "_saved_invoices", set()):
         return
-    frame._saved_invoices.add(frame._current_invoice)
 
     items_str = format_items_for_legacy_csv(frame.bill_items)
     exists = os.path.exists(report_path)
     billed_by = frame.app.current_user.get("username", "") if getattr(frame.app, "current_user", None) else ""
     total_discount = disc + mem_disc + pts_disc + offer_disc + redeem_disc
-
-    with open(report_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if not exists:
-            writer.writerow(["Date", "Invoice", "Name", "Phone", "Payment", "Total", "Discount", "Items", "Created By"])
-        writer.writerow([
-            deps.now(),
-            frame._current_invoice,
-            frame.name_ent.get(),
-            frame.phone_ent.get(),
-            frame.payment_var.get(),
-            round(final, 2),
-            round(total_discount, 2),
-            items_str,
-            billed_by,
-        ])
-
-    try:
-        deps.deduct_inventory_for_sale(frame.bill_items)
-    except Exception:
-        pass
-
     customer_phone = frame.phone_ent.get().strip()
     customer_name = frame.name_ent.get().strip()
     birthday = frame.bday_ent.get().strip() if hasattr(frame, "bday_ent") else ""
-    deps.auto_save_customer(customer_phone, customer_name, birthday)
+    
+    try:
+        val_str = frame.amount_paid_var.get().strip()
+        amt_paid = float(val_str) if val_str else final
+    except Exception:
+        amt_paid = final
+        
+    unpaid_amount = final - amt_paid
 
-    if customer_phone and customer_phone not in ("0000000000", ""):
-        deps.record_visit(customer_phone, frame._current_invoice, frame.bill_items, final, frame.payment_var.get())
+    with db_transaction() as conn:
+        if customer_phone and customer_phone not in ("0000000000", "") and unpaid_amount > 0 and deps.use_v5_customers_db():
+            cust = conn.execute(
+                "SELECT id, COALESCE(credit_limit, 0.0) as cl, COALESCE(current_due, 0.0) as cd, COALESCE(is_blacklisted, 0) as bl FROM v5_customers WHERE legacy_phone = ?",
+                (customer_phone,)
+            ).fetchone()
+            if cust:
+                override_blacklist = getattr(frame, "_override_blacklist", False)
+                if cust["bl"] and not override_blacklist:
+                    raise ValueError("Customer is blacklisted. Credit not allowed. Full payment is required.")
+                c_due = float(cust["cd"])
+                c_lim = float(cust["cl"])
+                new_due = max(0.0, round(c_due + unpaid_amount, 2))
+                if c_lim > 0 and new_due > c_lim and not override_blacklist:
+                    raise ValueError(f"Credit limit exceeded. Limit: {c_lim}, New Due: {new_due}")
+                conn.execute("UPDATE v5_customers SET current_due = ? WHERE id = ?", (new_due, cust["id"]))
 
-    if frame.use_pts_var.get() and pts_disc > 0:
-        deps.redeem_points(customer_phone, int(max(0.0, pts_disc)))
-
-    if frame._applied_redeem_code:
+        # Non-critical side effects should not block invoice persistence.
         try:
-            deps.apply_redeem_code(
-                frame._applied_redeem_code,
-                frame._current_invoice,
-                customer_phone=customer_phone,
-            )
+            deps.deduct_inventory_for_sale(frame.bill_items)
         except Exception:
             pass
+
+        try:
+            deps.auto_save_customer(customer_phone, customer_name, birthday)
+        except Exception:
+            pass
+
+        if customer_phone and customer_phone not in ("0000000000", ""):
+            try:
+                deps.record_visit(customer_phone, frame._current_invoice, frame.bill_items, final, frame.payment_var.get())
+            except Exception:
+                pass
+
+        if frame.use_pts_var.get() and pts_disc > 0:
+            try:
+                deps.redeem_points(customer_phone, int(max(0.0, pts_disc)))
+            except Exception:
+                pass
+
+        if frame._applied_redeem_code:
+            try:
+                deps.apply_redeem_code(
+                    frame._applied_redeem_code,
+                    frame._current_invoice,
+                    customer_phone=customer_phone,
+                )
+            except Exception:
+                pass
+
+    # After successful transaction commit
+    frame._saved_invoices.add(frame._current_invoice)
+
+    try:
+        with open(report_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if not exists:
+                writer.writerow(["Date", "Invoice", "Name", "Phone", "Payment", "Total", "Discount", "Items", "Created By"])
+            writer.writerow([
+                deps.now(),
+                frame._current_invoice,
+                frame.name_ent.get(),
+                frame.phone_ent.get(),
+                frame.payment_var.get(),
+                round(final, 2),
+                round(total_discount, 2),
+                items_str,
+                billed_by,
+            ])
+    except Exception as e:
+        # Ignore legacy CSV write failures, since DB transaction was successful
+        pass
 
     try:
         deps.auto_sync()

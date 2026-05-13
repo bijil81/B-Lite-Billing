@@ -14,6 +14,9 @@ RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 def default_main_script_path() -> str:
     """Return the V6 project-root main.py path from this extracted module."""
     project_root = Path(__file__).resolve().parents[3]
+    legacy_root = project_root.parent / "B-Lite management_Billing_V6.0"
+    if legacy_root.exists():
+        return str(legacy_root / "main.py")
     return str(project_root / "main.py")
 
 
@@ -52,4 +55,3 @@ def setup_windows_startup(enable: bool) -> bool:
     except Exception as exc:
         app_log(f"[Startup] {exc}")
         return False
-

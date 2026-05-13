@@ -19,7 +19,7 @@ All sections honour print_settings — disabled sections produce ZERO lines.
 import os
 from datetime import datetime
 
-from utils import DATA_DIR, load_json, save_json, safe_float, fmt_currency
+from utils import DATA_DIR, load_json, save_json, safe_float, fmt_currency, app_log
 from branding import get_branding_logo_path, get_invoice_branding
 from print_utils import (
     center_text, right_align, trunc, separator, wrap_text,
@@ -115,7 +115,10 @@ def get_print_settings() -> dict:
 
 def save_print_settings(data: dict) -> bool:
     merged = {**PRINT_DEFAULTS, **data}
-    return save_json(F_PRINT_SETTINGS, merged)
+    ok = save_json(F_PRINT_SETTINGS, merged)
+    if not ok:
+        app_log(f"[save_print_settings] Save failed for {F_PRINT_SETTINGS}", "error")
+    return ok
 
 
 def _get_width(ps: dict) -> int:
@@ -158,7 +161,11 @@ class BillData:
                  taxable_amount: float = 0.0,
                  gst_mode:       str   = "global",
                  gst_breakdown:  list = None,
+                 wallet_used:    float = 0.0,
+                 wallet_balance_after: float = 0.0,
                  grand_total:    float = 0.0,
+                 amount_paid:    float = 0.0,
+                 unpaid_amount:  float = 0.0,
                  timestamp:      str   = ""):
         self.invoice         = invoice
         self.salon_name      = salon_name or get_invoice_branding()["header"]
@@ -185,7 +192,11 @@ class BillData:
         self.taxable_amount  = taxable_amount
         self.gst_mode        = gst_mode
         self.gst_breakdown   = tuple(gst_breakdown or [])
+        self.wallet_used     = wallet_used
+        self.wallet_balance_after = wallet_balance_after
         self.grand_total     = grand_total
+        self.amount_paid     = amount_paid
+        self.unpaid_amount   = unpaid_amount
         self.timestamp       = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
@@ -330,11 +341,15 @@ def build_summary(bill: BillData, ps: dict, W: int) -> list:
         gst_rate        = bill.gst_rate,
         gst_type        = bill.gst_type,
         grand_total     = bill.grand_total,
+        amount_paid     = bill.amount_paid,
+        unpaid_amount   = bill.unpaid_amount,
         width           = W,
         settings        = ps,
         gst_breakdown   = bill.gst_breakdown,
         taxable_amount  = bill.taxable_amount,
         gst_mode        = bill.gst_mode,
+        wallet_used     = bill.wallet_used,
+        wallet_balance_after = bill.wallet_balance_after,
     )
 
 
@@ -531,27 +546,59 @@ def generate_a4_pdf(bill: BillData, output_path: str,
 
     try:
         from reportlab.pdfgen import canvas as rl_canvas
-        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.pagesizes import A4, A5
         from reportlab.lib.units import mm
         from reportlab.lib import colors as rl_colors
     except ImportError:
         raise ImportError("reportlab not installed. Run: pip install reportlab")
 
-    pw, ph = A4
-    c      = rl_canvas.Canvas(output_path, pagesize=A4)
-    margin = 15 * mm
+    template = ps.get("template", "a4_standard")
+    if template == "a5_halfpage":
+        page_size = A5
+        margin = 12 * mm
+        header_shop_size = 14
+        header_meta_size = 8
+        body_font_size = 9
+        total_font_size = 10
+        total_box_font_size = 11
+        footer_size = 9
+    elif template == "invoice_compact":
+        page_size = A5
+        margin = 10 * mm
+        header_shop_size = 14
+        header_meta_size = 8
+        body_font_size = 8
+        total_font_size = 9
+        total_box_font_size = 10
+        footer_size = 8
+    else:
+        page_size = A4
+        margin = 15 * mm
+        header_shop_size = 16
+        header_meta_size = 9
+        body_font_size = 10
+        total_font_size = 10
+        total_box_font_size = 12
+        footer_size = 10
+
+    pw, ph = page_size
+    c      = rl_canvas.Canvas(output_path, pagesize=page_size)
     y      = ph - margin
 
     def ln(n: float = 6):
         nonlocal y
         y -= n
 
-    def draw_line(x1=None, x2=None, color: str = "#cccccc"):
+    def draw_line(x1=None, x2=None, color: str = "#cccccc",
+                  before: float = 4, after: float = 10):
         nonlocal y
+        if before:
+            ln(before)
         c.setStrokeColor(rl_colors.HexColor(color))
         c.setLineWidth(0.5)
         c.line(x1 or margin, y, x2 or (pw - margin), y)
-        ln(4)
+        if after:
+            ln(after)
 
     def text(txt, x=None, font: str = "Helvetica", size: int = 10,
              bold: bool = False, center_: bool = False,
@@ -584,19 +631,19 @@ def generate_a4_pdf(bill: BillData, output_path: str,
                 pass  # silently skip if image fails
 
     if ps.get("show_shop_name"):
-        text(bill.salon_name, font="Helvetica-Bold", size=16,
+        text(bill.salon_name, font="Helvetica-Bold", size=header_shop_size,
              center_=True, color="#1a1a2e")
 
     if ps.get("show_address") and bill.address:
-        text(bill.address, size=9, center_=True, color="#555555")
+        text(bill.address, size=header_meta_size, center_=True, color="#555555")
 
     if ps.get("show_phone") and bill.phone:
-        text(f"Phone: {bill.phone}", size=9, center_=True, color="#555555")
+        text(f"Phone: {bill.phone}", size=header_meta_size, center_=True, color="#555555")
 
     if ps.get("show_gst_no") and bill.gst_no:
-        text(f"GSTIN: {bill.gst_no}", size=9, center_=True, color="#555555")
+        text(f"GSTIN: {bill.gst_no}", size=header_meta_size, center_=True, color="#555555")
 
-    draw_line(color="#0f3460")
+    draw_line(color="#0f3460", before=4, after=14)
 
     # ── Invoice details ──────────────────────────────────────────────────────
     try:
@@ -619,7 +666,7 @@ def generate_a4_pdf(bill: BillData, output_path: str,
     if ps.get("show_time"):
         date_parts.append(now.strftime("%I:%M %p"))
     if date_parts:
-        c.setFont("Helvetica", 9)
+        c.setFont("Helvetica", header_meta_size)
         c.setFillColor(rl_colors.HexColor("#555555"))
         c.drawString(left_x, row_y, "   ".join(date_parts))
         row_y -= 12
@@ -628,36 +675,46 @@ def generate_a4_pdf(bill: BillData, output_path: str,
 
     # ── Customer block ───────────────────────────────────────────────────────
     if ps.get("show_customer_name") and bill.customer_name:
-        c.setFont("Helvetica", 10)
+        c.setFont("Helvetica", body_font_size)
         c.setFillColor(rl_colors.HexColor("#1a1a2e"))
         c.drawString(margin, y, f"Customer : {bill.customer_name}")
         ln(13)
     if ps.get("show_customer_phone") and bill.customer_phone:
-        c.setFont("Helvetica", 10)
+        c.setFont("Helvetica", body_font_size)
         c.drawString(margin, y, f"Phone    : {bill.customer_phone}")
         ln(13)
     if ps.get("show_payment_method") and bill.payment_method:
-        c.setFont("Helvetica", 10)
+        c.setFont("Helvetica", body_font_size)
         c.drawString(margin, y, f"Payment  : {bill.payment_method}")
         ln(13)
 
-    draw_line()
+    draw_line(before=4, after=14)
 
     # ── Items table ──────────────────────────────────────────────────────────
+    content_w = pw - (margin * 2)
+    wide_page = content_w > 140 * mm
+    qty_width = 16 * mm if wide_page else 14 * mm
+    rate_width = 28 * mm if wide_page else 22 * mm
+    amt_width = 34 * mm if wide_page else 28 * mm
+    col_gap = 6 * mm if wide_page else 4 * mm
     col_name = margin
-    col_qty  = pw - margin - 80
-    col_rate = pw - margin - 50
-    col_amt  = pw - margin - 10
+    col_amt_right = pw - margin
+    col_amt_left = col_amt_right - amt_width
+    col_rate_right = col_amt_left - col_gap
+    col_rate_left = col_rate_right - rate_width
+    col_qty_right = col_rate_left - col_gap
+    col_qty_left = col_qty_right - qty_width
+    name_max_chars = 52 if wide_page else 34
 
     def table_header():
-        c.setFont("Helvetica-Bold", 9)
+        c.setFont("Helvetica-Bold", max(8, body_font_size - 1))
         c.setFillColor(rl_colors.HexColor("#0f3460"))
         c.drawString(col_name, y, "#  Item")
-        c.drawRightString(col_qty,  y, "Qty")
-        c.drawRightString(col_rate, y, "Rate")
-        c.drawRightString(col_amt,  y, "Amount")
-        ln(4)
-        draw_line(color="#aaaaaa")
+        c.drawCentredString((col_qty_left + col_qty_right) / 2, y, "Qty")
+        c.drawCentredString((col_rate_left + col_rate_right) / 2, y, "Rate")
+        c.drawCentredString((col_amt_left + col_amt_right) / 2, y, "Amount")
+        ln(body_font_size + 10)
+        draw_line(color="#aaaaaa", before=2, after=10)
 
     def table_row(idx: int, it: dict):
         nonlocal y
@@ -666,53 +723,54 @@ def generate_a4_pdf(bill: BillData, output_path: str,
             y = ph - margin
             table_header()
         prefix = f"{idx}. " if ps.get("show_item_numbering") else "  "
-        nm     = trunc(prefix + it.get("name", ""), 55)
+        nm     = trunc(prefix + it.get("name", ""), name_max_chars)
         price  = float(it.get("price", 0))
         qty    = float(it.get("qty", 1))
         qty_label = format_cart_quantity_label(it)
         amt    = price * qty
-        c.setFont("Helvetica", 9)
+        c.setFont("Helvetica", body_font_size)
         c.setFillColor(rl_colors.black)
         c.drawString(col_name, y, nm)
-        c.drawRightString(col_qty,  y, qty_label)
-        c.drawRightString(col_rate, y, f"Rs.{price:.2f}")
-        c.drawRightString(col_amt,  y, f"Rs.{amt:.2f}")
-        ln(13)
+        c.drawRightString(col_qty_right - 1.5 * mm, y, qty_label)
+        c.drawRightString(col_rate_right, y, f"Rs.{price:.2f}")
+        c.drawRightString(col_amt_right, y, f"Rs.{amt:.2f}")
+        ln(body_font_size + 12)
 
     counter = [0]
 
     if ps.get("show_services_section") and bill.svc_items:
-        c.setFont("Helvetica-Bold", 10)
+        c.setFont("Helvetica-Bold", body_font_size + 1)
         c.setFillColor(rl_colors.HexColor("#16a085"))
         c.drawString(margin, y, "SERVICES")
-        ln(12)
+        ln(14)
         table_header()
         for it in bill.svc_items:
             counter[0] += 1
             table_row(counter[0], it)
 
     if ps.get("show_products_section") and bill.prd_items:
-        ln(4)
-        c.setFont("Helvetica-Bold", 10)
+        ln(8)
+        c.setFont("Helvetica-Bold", body_font_size + 1)
         c.setFillColor(rl_colors.HexColor("#2980b9"))
         c.drawString(margin, y, "PRODUCTS")
-        ln(12)
+        ln(14)
         table_header()
         for it in bill.prd_items:
             counter[0] += 1
             table_row(counter[0], it)
 
-    draw_line()
+    draw_line(before=6, after=14)
 
     # ── Totals ───────────────────────────────────────────────────────────────
-    total_x = pw - margin - 160
+    total_block_width = 58 * mm if content_w > 140 * mm else 44 * mm
+    total_x = pw - margin - total_block_width
     val_x   = pw - margin
 
     def total_row(label: str, value: float,
                   bold: bool = False, color: str = "#1a1a2e"):
         nonlocal y
         font = "Helvetica-Bold" if bold else "Helvetica"
-        c.setFont(font, 10)
+        c.setFont(font, total_font_size)
         c.setFillColor(rl_colors.HexColor(color))
         c.drawString(total_x, y, label)
         c.drawRightString(val_x, y, f"Rs.{value:.2f}")
@@ -725,6 +783,7 @@ def generate_a4_pdf(bill: BillData, output_path: str,
         bill.offer_discount > 0,
         bill.redeem_discount> 0,
         bill.gst_amount     > 0,
+        bill.wallet_used    > 0,
     ])
 
     if ps.get("show_subtotal") and has_disc:
@@ -752,19 +811,28 @@ def generate_a4_pdf(bill: BillData, output_path: str,
 
     # Grand total — highlighted box
     if ps.get("show_grand_total"):
-        draw_line(color="#0f3460")
+        draw_line(color="#0f3460", before=6, after=12)
+        total_value = f"Rs.{bill.grand_total:.2f}"
+        label_width = c.stringWidth("GRAND TOTAL", "Helvetica-Bold", total_box_font_size)
+        value_width = c.stringWidth(total_value, "Helvetica-Bold", total_box_font_size)
+        badge_width = max((val_x - total_x) + 20, label_width + value_width + 28)
         c.setFillColor(rl_colors.HexColor("#1a1a2e"))
-        c.rect(total_x - 8, y - 4, val_x - total_x + 20, 22, fill=1, stroke=0)
-        c.setFont("Helvetica-Bold", 12)
+        c.rect(val_x - badge_width, y - 4, badge_width, 22, fill=1, stroke=0)
+        c.setFont("Helvetica-Bold", total_box_font_size)
         c.setFillColor(rl_colors.white)
-        c.drawString(total_x, y + 4, "GRAND TOTAL")
-        c.drawRightString(val_x, y + 4, f"Rs.{bill.grand_total:.2f}")
+        c.drawString(val_x - badge_width + 8, y + 4, "GRAND TOTAL")
+        c.drawRightString(val_x - 8, y + 4, total_value)
         ln(24)
+
+    if bill.wallet_used > 0:
+        total_row("Wallet Paid", bill.wallet_used, color="#0f766e")
+        total_row("Wallet Bal", bill.wallet_balance_after, color="#0f766e")
+        total_row("PAYABLE", max(0.0, bill.grand_total - bill.wallet_used), bold=True, color="#1a1a2e")
 
     # ── Footer ───────────────────────────────────────────────────────────────
     if ps.get("show_footer"):
         footer = ps.get("footer_text", get_invoice_branding()["footer"])
-        c.setFont("Helvetica-Oblique", 10)
+        c.setFont("Helvetica-Oblique", footer_size)
         c.setFillColor(rl_colors.HexColor("#555555"))
         c.drawCentredString(pw / 2, 30, trunc(footer, 80))
 

@@ -15,6 +15,9 @@ class CustomersRepository:
         with connection_scope() as conn:
             rows = conn.execute("""
                 SELECT id, legacy_phone, name, birthday, vip, points_balance,
+                       COALESCE(credit_limit, 0.0) as credit_limit,
+                       COALESCE(current_due, 0.0) as current_due,
+                       COALESCE(is_blacklisted, 0) as is_blacklisted,
                        created_at, updated_at
                 FROM v5_customers
                 WHERE COALESCE(is_deleted, 0) = 0
@@ -27,6 +30,9 @@ class CustomersRepository:
         with connection_scope() as conn:
             row = conn.execute("""
                 SELECT id, legacy_phone, name, birthday, vip, points_balance,
+                       COALESCE(credit_limit, 0.0) as credit_limit,
+                       COALESCE(current_due, 0.0) as current_due,
+                       COALESCE(is_blacklisted, 0) as is_blacklisted,
                        created_at, updated_at
                 FROM v5_customers
                 WHERE legacy_phone = ? AND COALESCE(is_deleted, 0) = 0
@@ -92,6 +98,14 @@ class CustomersRepository:
         with connection_scope() as conn:
             conn.execute("DELETE FROM v5_customers WHERE legacy_phone = ?", (phone,))
 
+    def update_customer_due(self, phone: str, new_due: float) -> None:
+        ensure_v5_schema()
+        with connection_scope() as conn:
+            conn.execute(
+                "UPDATE v5_customers SET current_due = ?, updated_at = datetime('now') WHERE legacy_phone = ?",
+                (float(new_due), phone),
+            )
+
     def upsert_legacy_customer(
         self,
         phone: str,
@@ -99,24 +113,51 @@ class CustomersRepository:
         birthday: str = "",
         vip: bool = False,
         points_balance: int = 0,
+        credit_limit: Optional[float] = None,
+        is_blacklisted: Optional[bool] = None,
     ) -> None:
         ensure_v5_schema()
         with connection_scope() as conn:
-            conn.execute("""
-                INSERT INTO v5_customers(
-                    legacy_phone, name, birthday, vip, points_balance, updated_at
-                )
-                VALUES(?, ?, ?, ?, ?, datetime('now'))
-                ON CONFLICT(legacy_phone) DO UPDATE SET
-                    name = excluded.name,
-                    birthday = excluded.birthday,
-                    vip = excluded.vip,
-                    points_balance = excluded.points_balance,
-                    updated_at = excluded.updated_at
-            """, (
-                phone,
-                name,
-                birthday,
-                normalize_bool(vip),
-                int(points_balance),
-            ))
+            if credit_limit is not None:
+                blacklist_val = int(bool(is_blacklisted)) if is_blacklisted is not None else 0
+                conn.execute("""
+                    INSERT INTO v5_customers(
+                        legacy_phone, name, birthday, vip, points_balance, credit_limit, is_blacklisted, updated_at
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    ON CONFLICT(legacy_phone) DO UPDATE SET
+                        name = excluded.name,
+                        birthday = excluded.birthday,
+                        vip = excluded.vip,
+                        points_balance = excluded.points_balance,
+                        credit_limit = excluded.credit_limit,
+                        is_blacklisted = excluded.is_blacklisted,
+                        updated_at = excluded.updated_at
+                """, (
+                    phone,
+                    name,
+                    birthday,
+                    normalize_bool(vip),
+                    int(points_balance),
+                    float(credit_limit),
+                    blacklist_val,
+                ))
+            else:
+                conn.execute("""
+                    INSERT INTO v5_customers(
+                        legacy_phone, name, birthday, vip, points_balance, updated_at
+                    )
+                    VALUES(?, ?, ?, ?, ?, datetime('now'))
+                    ON CONFLICT(legacy_phone) DO UPDATE SET
+                        name = excluded.name,
+                        birthday = excluded.birthday,
+                        vip = excluded.vip,
+                        points_balance = excluded.points_balance,
+                        updated_at = excluded.updated_at
+                """, (
+                    phone,
+                    name,
+                    birthday,
+                    normalize_bool(vip),
+                    int(points_balance),
+                ))

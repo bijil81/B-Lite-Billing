@@ -38,7 +38,12 @@ from branding import (
     get_sidebar_title,
     get_window_title,
 )
-from ui_responsive import get_responsive_metrics, initialize_responsive
+from ui_responsive import (
+    _bind_mousewheel,
+    get_responsive_metrics,
+    initialize_responsive,
+    set_manual_ui_scale,
+)
 from ui_theme import refresh_fonts
 from src.blite_v6.app.app_specs import (
     action_allows_role,
@@ -48,6 +53,11 @@ from src.blite_v6.app.app_specs import (
     first_allowed_nav_key,
     nav_entry_allows_role,
     normalize_role,
+)
+from src.blite_v6.app.dpi_runtime import (
+    dpi_snapshot,
+    dpi_snapshot_changed,
+    tk_scaling_for_dpi,
 )
 from src.blite_v6.app.startup_runtime import (
     _enable_windows_dpi_awareness,
@@ -110,6 +120,10 @@ from src.blite_v6.app.app_events import (
     should_force_inventory_refresh,
     today_refresh_allowed,
 )
+from src.blite_v6.settings.zoom_preferences import (
+    clamp_global_zoom,
+    step_global_zoom,
+)
 # Ã¢â€â‚¬Ã¢â€â‚¬ AI Assistant (optional Ã¢â‚¬â€ works without if not installed) Ã¢â€â‚¬Ã¢â€â‚¬
 try:
     from ai_assistant.controllers.ai_controller import AIController
@@ -128,7 +142,13 @@ class SalonApp:
         return normalize_role(self.current_user.get("role", "staff"))
 
     def _has_access(self, nav_entry) -> bool:
-        return nav_entry_allows_role(nav_entry, self._user_role())
+        if not nav_entry_allows_role(nav_entry, self._user_role()):
+            return False
+        try:
+            key = nav_entry[2]
+        except Exception:
+            return False
+        return self._sidebar_module_enabled(key)
 
     def has_permission(self, permission: str) -> bool:
         return action_allows_role(self.ACTION_ROLES, permission, self._user_role())
@@ -141,7 +161,18 @@ class SalonApp:
         return False
 
     def _first_allowed_nav_key(self):
-        return first_allowed_nav_key(self.NAV, self._user_role())
+        for entry in self.NAV:
+            if self._has_access(entry):
+                return entry[2]
+        return None
+
+    def _sidebar_module_enabled(self, key: str) -> bool:
+        try:
+            from salon_settings import get_settings as _gs
+            from src.blite_v6.settings.tab_specs import sidebar_module_enabled
+            return sidebar_module_enabled(_gs(), key)
+        except Exception:
+            return True
 
     def _destroy_ai_floating_widgets(self):
         for attr in ("_ai_window", "_ai_chat"):
@@ -151,14 +182,20 @@ class SalonApp:
             try:
                 if hasattr(widget, "hide"):
                     widget.hide()
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] ai widget hide failed: {e}")
+                except:
+                    print(f"[main.py] ai widget hide failed:", e)
             try:
                 btn = getattr(widget, "_float_btn", None)
                 if btn and btn.winfo_exists():
                     btn.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] ai btn destroy failed: {e}")
+                except:
+                    print(f"[main.py] ai btn destroy failed:", e)
             setattr(self, attr, None)
 
     def _refresh_ai_floating_button(self):
@@ -198,8 +235,11 @@ class SalonApp:
             label.configure(fg=C["muted"])
             anim.color(label, C["muted"], C["text"], prop="fg", dur=170)
             self.root.after(LOADING_PULSE_REPEAT_MS, lambda: self._animate_loading_placeholder())
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] loading placeholder animate failed: {e}")
+            except:
+                print(f"[main.py] loading placeholder animate failed:", e)
 
     def _animate_loading_text(self, step=0):
         placeholder = getattr(self, "_startup_placeholder", None)
@@ -250,25 +290,81 @@ class SalonApp:
             anim.color(self.page_title, C["muted"], C["text"], prop="fg", dur=PAGE_TITLE_REVEAL_MS)
             self.today_lbl.configure(bg=C["blue"])
             anim.color(self.today_lbl, C["blue"], C["teal"], prop="bg", dur=TODAY_REVEAL_MS)
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] page reveal animate failed: {e}")
+            except:
+                print(f"[main.py] page reveal animate failed:", e)
 
     def apply_runtime_preferences(self):
+        try:
+            from salon_settings import get_settings as _gs
+            set_manual_ui_scale(_gs().get("ui_scale", 1.0))
+        except Exception as e:
+            app_log(f"[apply_runtime_preferences zoom] {e}")
         view = runtime_preference_view(self._animations_enabled())
         if view.reset_animation_colors:
             try:
                 self.page_title.configure(fg=C["text"])
                 self.today_lbl.configure(bg=C["teal"])
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] reset animation colors failed: {e}")
+                except:
+                    print(f"[main.py] reset animation colors failed:", e)
         if view.refresh_ai_floating_button:
             self._refresh_ai_floating_button()
         try:
-            billing = getattr(self, "billing", None)
-            if billing is not None and hasattr(billing, "refresh"):
+            billing = getattr(self, "billing_frame", None) or getattr(self, "billing", None)
+            if billing is not None and hasattr(billing, "rebuild_for_zoom"):
+                billing.rebuild_for_zoom()
+            elif billing is not None and hasattr(billing, "refresh"):
                 billing.refresh()
         except Exception as _e:
             app_log(f"[apply_runtime_preferences billing refresh] {_e}")
+
+    def _install_zoom_shortcuts(self):
+        try:
+            self.root.bind_all("<Control-plus>", lambda e: self._adjust_global_zoom(1), add="+")
+            self.root.bind_all("<Control-equal>", lambda e: self._adjust_global_zoom(1), add="+")
+            self.root.bind_all("<Control-KP_Add>", lambda e: self._adjust_global_zoom(1), add="+")
+            self.root.bind_all("<Control-minus>", lambda e: self._adjust_global_zoom(-1), add="+")
+            self.root.bind_all("<Control-KP_Subtract>", lambda e: self._adjust_global_zoom(-1), add="+")
+            self.root.bind_all("<Control-0>", lambda e: self._reset_global_zoom(), add="+")
+        except Exception as e:
+            app_log(f"[_install_zoom_shortcuts] {e}")
+
+    def _save_global_zoom_value(self, value: float):
+        from salon_settings import get_settings as _gs, save_settings as _ss
+        cfg = dict(_gs())
+        cfg["ui_scale"] = clamp_global_zoom(value)
+        _ss(cfg)
+        set_manual_ui_scale(cfg["ui_scale"])
+        try:
+            settings_frame = self.frames.get("settings")
+            if settings_frame is not None and hasattr(settings_frame, "sync_zoom_controls"):
+                settings_frame.sync_zoom_controls(cfg)
+        except Exception as e:
+            app_log(f"[_save_global_zoom_value sync settings] {e}")
+        return cfg["ui_scale"]
+
+    def _adjust_global_zoom(self, direction: int):
+        try:
+            from salon_settings import get_settings as _gs
+            new_zoom = step_global_zoom(_gs().get("ui_scale", 1.0), direction)
+            self._save_global_zoom_value(new_zoom)
+            self.apply_runtime_preferences()
+        except Exception as e:
+            app_log(f"[_adjust_global_zoom] {e}")
+        return "break"
+
+    def _reset_global_zoom(self):
+        try:
+            self._save_global_zoom_value(1.0)
+            self.apply_runtime_preferences()
+        except Exception as e:
+            app_log(f"[_reset_global_zoom] {e}")
+        return "break"
 
     def apply_runtime_ai_settings(self):
         try:
@@ -318,6 +414,9 @@ class SalonApp:
 
     def apply_runtime_feature_settings(self):
         try:
+            from salon_settings import get_settings as _gs
+            from src.blite_v6.settings.tab_specs import optional_sidebar_module_defs, sidebar_module_enabled
+            cfg = _gs()
             ai_enabled = self._feature_enabled("ai_assistant")
             plan = ai_feature_update_plan(
                 ai_enabled=ai_enabled,
@@ -341,9 +440,14 @@ class SalonApp:
                 try:
                     if stale and stale.winfo_exists():
                         stale.destroy()
-                except Exception:
-                    pass
+                except Exception as e:
+                    try:
+                        app_log(f"[main.py] stale ai frame destroy failed: {e}")
+                    except:
+                        print(f"[main.py] stale ai frame destroy failed:", e)
                 self.module_classes.pop("ai_assistant", None)
+            for module_key, _label in optional_sidebar_module_defs():
+                self._set_nav_row_visibility(module_key, sidebar_module_enabled(cfg, module_key))
             self._set_nav_row_visibility("ai_assistant", plan.show_ai_nav_row)
             if plan.refresh_ai_floating_button:
                 self._refresh_ai_floating_button()
@@ -351,6 +455,12 @@ class SalonApp:
                 self._destroy_ai_floating_widgets()
             if plan.switch_to_key:
                 self.switch_to(plan.switch_to_key)
+            elif self.current_page_key:
+                current_entry = next((entry for entry in self.NAV if entry[2] == self.current_page_key), None)
+                if current_entry is not None and not self._has_access(current_entry):
+                    fallback_key = self._first_allowed_nav_key()
+                    if fallback_key and fallback_key != self.current_page_key:
+                        self.switch_to(fallback_key)
         except Exception as _fe:
             app_log(f"[apply_runtime_feature_settings] {_fe}")
 
@@ -358,67 +468,106 @@ class SalonApp:
         self._restart_login_requested = True
         try:
             self._cancel_root_after_callbacks()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] restart cancel callbacks failed: {e}")
+            except:
+                print(f"[main.py] restart cancel callbacks failed:", e)
         try:
             from ui_theme import anim
             anim.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] restart anim stop failed: {e}")
+            except:
+                print(f"[main.py] restart anim stop failed:", e)
         try:
             clear_icon_cache()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] restart clear icons failed: {e}")
+            except:
+                print(f"[main.py] restart clear icons failed:", e)
         try:
             self._destroy_ai_floating_widgets()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] restart destroy floating widgets failed: {e}")
+            except:
+                print(f"[main.py] restart destroy floating widgets failed:", e)
         try:
             self.root.withdraw()
             self.root.update_idletasks()
             self.root.update()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] restart withdraw failed: {e}")
+            except:
+                print(f"[main.py] restart withdraw failed:", e)
         try:
             self.root.quit()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] restart quit failed: {e}")
+            except:
+                print(f"[main.py] restart quit failed:", e)
 
     def _shutdown_app(self):
         self._restart_login_requested = False
         try:
             self._cancel_root_after_callbacks()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] shutdown cancel callbacks failed: {e}")
+            except:
+                print(f"[main.py] shutdown cancel callbacks failed:", e)
         # V5.6.1 Phase 1 — Stop scheduled backup on shutdown
         try:
             from scheduled_backup import stop_scheduler
             stop_scheduler()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] shutdown stop scheduler failed: {e}")
+            except:
+                print(f"[main.py] shutdown stop scheduler failed:", e)
         try:
             from ui_theme import anim
             anim.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] shutdown anim stop failed: {e}")
+            except:
+                print(f"[main.py] shutdown anim stop failed:", e)
         try:
             clear_icon_cache()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] shutdown clear icons failed: {e}")
+            except:
+                print(f"[main.py] shutdown clear icons failed:", e)
         try:
             self._destroy_ai_floating_widgets()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] shutdown destroy floating widgets failed: {e}")
+            except:
+                print(f"[main.py] shutdown destroy floating widgets failed:", e)
         try:
             self.root.withdraw()
             self.root.update_idletasks()
             self.root.update()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] shutdown withdraw failed: {e}")
+            except:
+                print(f"[main.py] shutdown withdraw failed:", e)
         try:
             self.root.quit()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] shutdown quit failed: {e}")
+            except:
+                print(f"[main.py] shutdown quit failed:", e)
 
     def _cancel_root_after_callbacks(self):
         try:
@@ -428,8 +577,11 @@ class SalonApp:
         for after_id in normalize_after_ids(info):
             try:
                 self.root.after_cancel(after_id)
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] root after_cancel failed: {e}")
+                except:
+                    print(f"[main.py] root after_cancel failed:", e)
 
     def __init__(self, user: dict):
         self.current_user  = user
@@ -441,18 +593,31 @@ class SalonApp:
         hide_while_building(self.root)
         try:
             clear_icon_cache()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] init clear icon cache failed: {e}")
+            except:
+                print(f"[main.py] init clear icon cache failed:", e)
         try:
             self.root.protocol("WM_DELETE_WINDOW", self._shutdown_app)
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] root protocol setup failed: {e}")
+            except:
+                print(f"[main.py] root protocol setup failed:", e)
+        self._dpi_after_id = None
+        self._dpi_poll_ms = 1500
+        self._dpi_snapshot = None
         try:
             dpi = self.root.winfo_fpixels("1i")
-            self.root.tk.call("tk", "scaling", dpi / 72)
-        except Exception:
-            pass
+            self.root.tk.call("tk", "scaling", tk_scaling_for_dpi(dpi))
+        except Exception as e:
+            try:
+                app_log(f"[main.py] scaling setup failed: {e}")
+            except:
+                print(f"[main.py] scaling setup failed:", e)
         self._responsive = initialize_responsive(self.root)
+        self._dpi_snapshot = dpi_snapshot(self.root)
         # Phase 3 FIX: Recompute font constants from responsive metrics
         refresh_fonts()
         self.root.title(get_window_title(include_version=True))
@@ -464,8 +629,11 @@ class SalonApp:
         self.root.minsize(960, 600)
         try:
             self.root.iconbitmap(get_branding_icon_path("app"))
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] iconbitmap setup failed: {e}")
+            except:
+                print(f"[main.py] iconbitmap setup failed:", e)
         self._show_startup_placeholder(self.root)
         self.root.update_idletasks()
         reveal_when_ready(self.root)
@@ -475,6 +643,7 @@ class SalonApp:
         self._resize_debounce_ms = 150
         self._resize_after_id = None
         self.root.bind("<Configure>", self._on_window_resize, add="+")
+        self._schedule_dpi_watch()
 
         # Apply theme colors + global ttk dark styling BEFORE widgets are built
         try:
@@ -484,8 +653,11 @@ class SalonApp:
             apply_theme(_cfg.get("theme", "dark"))
             apply_global_ttk_dark_theme(self.root)
             self.root.update_idletasks()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] apply_theme setup failed: {e}")
+            except:
+                print(f"[main.py] apply_theme setup failed:", e)
         # Start animation engine after root is ready
         from ui_theme import anim
         anim.init(self.root)
@@ -513,6 +685,7 @@ class SalonApp:
         self._build()
         self._install_context_menu_shortcuts()
         self._setup_session_security()
+        self._install_zoom_shortcuts()
         self.root.update_idletasks()
         self.root.bind("<Map>", self._on_root_map, add="+")
         self._ai_window = None
@@ -538,8 +711,11 @@ class SalonApp:
         try:
             if int(self.root.winfo_exists()):
                 self.root.destroy()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] final root destroy failed: {e}")
+            except:
+                print(f"[main.py] final root destroy failed:", e)
 
     def _install_context_menu_shortcuts(self):
         try:
@@ -593,15 +769,21 @@ class SalonApp:
     def _logout_due_to_inactivity(self):
         try:
             messagebox.showwarning("Session Timeout", "Logged out due to inactivity.")
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] session timeout msgbox failed: {e}")
+            except:
+                print(f"[main.py] session timeout msgbox failed:", e)
         try:
             from auth import auto_mark_attendance
             username = logout_username(self.current_user)
             if username:
                 auto_mark_attendance(username, "logout")
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] session timeout auto logout mark failed: {e}")
+            except:
+                print(f"[main.py] session timeout auto logout mark failed:", e)
         self._restart_to_login()
 
     # Ã¢â€â‚¬Ã¢â€â‚¬ BUILD Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -648,14 +830,7 @@ class SalonApp:
         sb_body.bind("<Configure>", lambda e: sb_canvas.configure(scrollregion=sb_canvas.bbox("all")))
         sb_canvas.bind("<Configure>", lambda e: sb_canvas.itemconfigure(sb_window, width=e.width))
 
-        def _sb_mousewheel(event):
-            try:
-                sb_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except Exception:
-                pass
-
-        sb_canvas.bind("<Enter>", lambda e: sb_canvas.bind_all("<MouseWheel>", _sb_mousewheel))
-        sb_canvas.bind("<Leave>", lambda e: sb_canvas.unbind_all("<MouseWheel>"))
+        _bind_mousewheel(sb_canvas, sb_body)
         self._sidebar_canvas = sb_canvas
         self._sidebar_window = sb_window
         self._sidebar_body = sb_body
@@ -741,6 +916,8 @@ class SalonApp:
             self._nav_rows[key] = row
 
             if key == "ai_assistant" and not self._feature_enabled("ai_assistant"):
+                row.pack_forget()
+            elif not self._sidebar_module_enabled(key):
                 row.pack_forget()
 
         tk.Frame(sb_body, bg=C["sidebar"], height=max(8, nav_pady)).pack(fill=tk.X)
@@ -907,8 +1084,11 @@ class SalonApp:
             try:
                 sb_canvas.configure(width=new_w)
                 sb_canvas.itemconfigure(sb_window, width=new_w)
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] sidebar resize failed: {e}")
+                except:
+                    print(f"[main.py] sidebar resize failed:", e)
 
         sb_divider.bind("<B1-Motion>", _sb_drag)
         sb_divider.bind("<Enter>",
@@ -1002,10 +1182,86 @@ class SalonApp:
             if self._resize_after_id is not None:
                 try:
                     self.root.after_cancel(self._resize_after_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    try:
+                        app_log(f"[main.py] resize after_cancel failed: {e}")
+                    except:
+                        print(f"[main.py] resize after_cancel failed:", e)
             self._resize_after_id = self.root.after(
                 self._resize_debounce_ms, self._handle_resize)
+
+    def _schedule_dpi_watch(self):
+        try:
+            if self._dpi_after_id is not None:
+                self.root.after_cancel(self._dpi_after_id)
+            self._dpi_after_id = self.root.after(self._dpi_poll_ms, self._check_dpi_scale_change)
+        except Exception as e:
+            try:
+                app_log(f"[main.py] dpi watcher schedule failed: {e}")
+            except:
+                print(f"[main.py] dpi watcher schedule failed:", e)
+
+    def _check_dpi_scale_change(self):
+        self._dpi_after_id = None
+        try:
+            current = dpi_snapshot(self.root)
+            if dpi_snapshot_changed(self._dpi_snapshot, current):
+                previous = self._dpi_snapshot
+                self._dpi_snapshot = current
+                self._apply_runtime_scale_change(previous, current)
+        except Exception as e:
+            try:
+                app_log(f"[main.py] dpi watcher failed: {e}")
+            except:
+                print(f"[main.py] dpi watcher failed:", e)
+        finally:
+            try:
+                if self.root.winfo_exists():
+                    self._schedule_dpi_watch()
+            except Exception:
+                pass
+
+    def _apply_runtime_scale_change(self, previous: dict | None, current: dict):
+        """Refresh runtime metrics after Windows display scaling or monitor changes."""
+        try:
+            self.root.tk.call("tk", "scaling", tk_scaling_for_dpi(current.get("dpi", 96)))
+        except Exception:
+            pass
+        try:
+            initialize_responsive(self.root)
+            refresh_fonts()
+            clear_icon_cache()
+        except Exception as e:
+            app_log(f"[main.py] runtime scale metric refresh failed: {e}")
+        try:
+            if str(self.root.state()) == "zoomed":
+                self.root.geometry(f"{current['screen_w']}x{current['screen_h']}+0+0")
+                self.root.state("zoomed")
+        except Exception:
+            pass
+        try:
+            app_log(f"[main.py] display scale changed: {previous} -> {current}")
+        except Exception:
+            pass
+        self._refresh_active_page_for_scale()
+
+    def _refresh_active_page_for_scale(self):
+        try:
+            key = getattr(self, "current_page_key", None)
+            frame = self.frames.get(key) if key else None
+            if frame is None:
+                return
+            if key == "billing" and hasattr(frame, "rebuild_for_zoom"):
+                frame.rebuild_for_zoom()
+                return
+            if hasattr(frame, "refresh"):
+                frame.refresh()
+            self.root.update_idletasks()
+        except Exception as e:
+            try:
+                app_log(f"[main.py] scale page refresh failed: {e}")
+            except:
+                print(f"[main.py] scale page refresh failed:", e)
 
     def _handle_resize(self):
         """Called after debounce when window is resized."""
@@ -1019,8 +1275,11 @@ class SalonApp:
                 frame = self.frames.get(key)
                 if frame and hasattr(frame, "refresh"):
                     frame.refresh()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] _handle_resize refresh failed: {e}")
+            except:
+                print(f"[main.py] _handle_resize refresh failed:", e)
 
     def _restore_visible_page(self):
         key = restore_visible_page_key(self.current_page_key, self.frames.keys())
@@ -1033,8 +1292,11 @@ class SalonApp:
             frame.place(x=0, y=0, relwidth=1, relheight=1)
             frame.lift()
             self.root.update_idletasks()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] _restore_visible_page failed: {e}")
+            except:
+                print(f"[main.py] _restore_visible_page failed:", e)
 
     def _ensure_frame(self, key: str):
         cached_key = cached_frame_key(self.frames, key)
@@ -1141,8 +1403,11 @@ class SalonApp:
             try:
                 if placeholder.winfo_exists():
                     placeholder.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] placeholder destroy failed: {e}")
+                except:
+                    print(f"[main.py] placeholder destroy failed:", e)
             self._startup_placeholder = None
             self._startup_placeholder_label = None
             self._startup_media_label = None
@@ -1155,8 +1420,11 @@ class SalonApp:
                     other.place(x=0, y=0, relwidth=1, relheight=1)
                 else:
                     other.place_forget()
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] frame visibility toggle failed: {e}")
+                except:
+                    print(f"[main.py] frame visibility toggle failed:", e)
 
         frame.lift()
         self.current_page_key = key
@@ -1185,8 +1453,11 @@ class SalonApp:
         try:
             if hasattr(frame, "refresh"):
                 frame.refresh()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] switch_to frame refresh failed: {e}")
+            except:
+                print(f"[main.py] switch_to frame refresh failed:", e)
 
         self._refresh_today()
 
@@ -1196,8 +1467,11 @@ class SalonApp:
             if should_force_inventory_refresh(self.frames):
                 inventory_frame = self.frames.get("inventory")
                 inventory_frame._force_next_refresh = True
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] on_bill_saved inventory refresh flag failed: {e}")
+            except:
+                print(f"[main.py] on_bill_saved inventory refresh flag failed:", e)
         self._refresh_today(force=True)
 
     def _refresh_today(self, force: bool = False):
@@ -1235,8 +1509,11 @@ class SalonApp:
         try:
             btn.set_text(view.text)
             btn.set_color(view.color, view.hover_color)
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] update notification button failed: {e}")
+            except:
+                print(f"[main.py] update notification button failed:", e)
 
     def _show_notifications(self, manual: bool = True):
         try:
@@ -1303,7 +1580,7 @@ class SalonApp:
         except Exception:
             return
 
-    def _open_admin(self):
+    def _open_admin(self, initial_tab: str | None = None):
         """
         Bug 11 fix: prevent duplicate admin panel windows.
         Bug 12 fix: pass current_user to AdminPanel.
@@ -1312,6 +1589,11 @@ class SalonApp:
             return
         if admin_existing_panel_available(self._admin_panel):
             try:
+                try:
+                    if hasattr(self._admin_panel, "select_tab"):
+                        self._admin_panel.select_tab(initial_tab)
+                except Exception:
+                    pass
                 self._admin_panel.win.lift()
                 self._admin_panel.win.focus_set()
                 return
@@ -1320,17 +1602,59 @@ class SalonApp:
 
         from admin import AdminPanel
 
+        def _refresh_loaded_frame(page_key: str, force_next: bool = False):
+            try:
+                frame = self.frames.get(page_key)
+                if frame is None:
+                    return
+                if force_next and hasattr(frame, "_force_next_refresh"):
+                    frame._force_next_refresh = True
+                if hasattr(frame, "refresh"):
+                    frame.refresh()
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] refresh_loaded_frame('{page_key}') failed: {e}")
+                except Exception:
+                    pass
+
+        def _on_admin_catalog_changed():
+            try:
+                if self.billing_frame:
+                    try:
+                        self.billing_frame.reload_services()
+                    except Exception as e:
+                        try:
+                            app_log(f"[main.py] admin catalog reload_services failed: {e}")
+                        except Exception:
+                            pass
+                _refresh_loaded_frame("inventory", force_next=True)
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] admin catalog changed failed: {e}")
+                except Exception:
+                    pass
+
         def _on_admin_close():
             self._admin_panel = None
-            if self.billing_frame:
+            _on_admin_catalog_changed()
+
+        def _on_admin_users_changed():
+            try:
+                staff_frame = self.frames.get("staff")
+                if staff_frame is not None and hasattr(staff_frame, "refresh"):
+                    staff_frame.refresh()
+            except Exception as e:
                 try:
-                    self.billing_frame.reload_services()
+                    app_log(f"[main.py] admin users changed refresh failed: {e}")
                 except Exception:
                     pass
 
         self._admin_panel = AdminPanel(
             self.root,
             on_close=_on_admin_close,
+            on_users_changed=_on_admin_users_changed,
+            on_catalog_changed=_on_admin_catalog_changed,
+            initial_tab=initial_tab,
             current_user=self.current_user,
         )
 
@@ -1340,8 +1664,11 @@ class SalonApp:
             username = logout_username(self.current_user)
             if username:
                 auto_mark_attendance(username, "logout")
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] mark user logout attendance failed: {e}")
+            except:
+                print(f"[main.py] mark user logout attendance failed:", e)
 
     def _logout(self):
         if messagebox.askyesno("Logout", "Logout?"):
@@ -1355,8 +1682,11 @@ class SalonApp:
                     entity_id=user,
                     user=user,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] logout activity log failed: {e}")
+                except:
+                    print(f"[main.py] logout activity log failed:", e)
             self._mark_current_user_logout_attendance()
             _relaunch_current_app()
             self._shutdown_app()
@@ -1370,8 +1700,11 @@ def _start_login():
     while True:
         try:
             clear_icon_cache()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] start_login clear icon cache 1 failed: {e}")
+            except:
+                print(f"[main.py] start_login clear icon cache 1 failed:", e)
         app_log("[startup] login window launch", "info")
         login = LoginWindow()
         user = getattr(login, "logged_in_user", None)
@@ -1380,8 +1713,11 @@ def _start_login():
             sys.exit(0)
         try:
             clear_icon_cache()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                app_log(f"[main.py] start_login clear icon cache 2 failed: {e}")
+            except:
+                print(f"[main.py] start_login clear icon cache 2 failed:", e)
         try:
             licensing_ok = _run_startup_step("post-login licensing gate", ensure_startup_access)
         except Exception:
@@ -1400,8 +1736,11 @@ def _start_login():
                     "License Required",
                     "Please activate the license to continue.",
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] start_login license warning msgbox failed: {e}")
+                except:
+                    print(f"[main.py] start_login license warning msgbox failed:", e)
             continue
         app_log(f"[startup] launching main app for user={user.get('username', '')}", "info")
         app = SalonApp(user)
@@ -1471,8 +1810,11 @@ if __name__ == "__main__":
             # If first-run succeeded, use that user directly
             try:
                 clear_icon_cache()
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    app_log(f"[main.py] first run clear icon cache failed: {e}")
+                except:
+                    print(f"[main.py] first run clear icon cache failed:", e)
             try:
                 licensing_ok = _run_startup_step("post-first-run licensing gate", ensure_startup_access)
             except Exception:
@@ -1491,8 +1833,11 @@ if __name__ == "__main__":
                         "License Required",
                         "Please activate the license to continue.",
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    try:
+                        app_log(f"[main.py] first run license warning msgbox failed: {e}")
+                    except:
+                        print(f"[main.py] first run license warning msgbox failed:", e)
                 sys.exit(0)
             app = _run_startup_step(
                 "first-run app launch",

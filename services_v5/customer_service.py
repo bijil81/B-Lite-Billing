@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from repositories.customers_repo import CustomersRepository
 from validators.customer_validator import validate_customer_payload
+from db import db_transaction
+import datetime
+import random
 
 
 class CustomerService:
@@ -79,6 +82,9 @@ class CustomerService:
                 "points": int(customer.get("points_balance", 0) or 0),
                 "visits": visits,
                 "created": customer.get("created_at", ""),
+                "current_due": float(customer.get("current_due", 0.0) or 0.0),
+                "credit_limit": float(customer.get("credit_limit", 0.0) or 0.0),
+                "is_blacklisted": bool(customer.get("is_blacklisted", 0)),
             }
         # Filter out soft-deleted customers
         try:
@@ -107,6 +113,8 @@ class CustomerService:
             birthday=clean["birthday"],
             vip=clean["vip"],
             points_balance=clean["points_balance"],
+            credit_limit=clean.get("credit_limit"),
+            is_blacklisted=clean.get("is_blacklisted"),
         )
         self._invalidate_customer_cache(clean["phone"])
 
@@ -160,3 +168,83 @@ class CustomerService:
                 "points_balance": points_balance,
             }
         )
+
+    def settle_customer_due(
+        self,
+        phone: str,
+        amount_paid: float,
+        payment_method: str,
+        handled_by: str = ""
+    ) -> dict:
+        """Securely deducts due amount and logs a settlement payment record."""
+        if amount_paid <= 0:
+            raise ValueError("Settlement amount must be greater than zero.")
+        
+        phone = self._normalize_phone(phone)
+        customer = self.get_customer_by_phone(phone)
+        if not customer:
+            raise ValueError("Customer not found.")
+            
+        current_due = float(customer.get("current_due", 0.0) or 0.0)
+        if amount_paid > current_due:
+            raise ValueError(f"Cannot overpay. Current due is {current_due}.")
+            
+        # Generate receipt no: SET-YYYYMMDD-RND4
+        date_str = datetime.datetime.now().strftime("%Y%m%d")
+        rnd_suffix = f"{random.randint(1000, 9999)}"
+        receipt_no = f"SET-{date_str}-{rnd_suffix}"
+        
+        with db_transaction() as conn:
+            # Update customer due atomically to prevent TOCTOU race conditions
+            conn.execute(
+                "UPDATE v5_customers SET current_due = MAX(0.0, ROUND(current_due - ?, 2)) WHERE legacy_phone = ?",
+                (amount_paid, phone)
+            )
+            
+            # Fetch the actual new due after atomic deduction
+            row = conn.execute("SELECT current_due, credit_limit, is_blacklisted FROM v5_customers WHERE legacy_phone = ?", (phone,)).fetchone()
+            actual_new_due = float(row["current_due"]) if row else 0.0
+            limit = float(row["credit_limit"]) if row else 1000.0
+            
+            # Auto-remove blacklist if due falls below credit limit
+            if actual_new_due <= limit and row and row["is_blacklisted"]:
+                conn.execute("UPDATE v5_customers SET is_blacklisted = 0 WHERE legacy_phone = ?", (phone,))
+            
+            # Record settlement
+            conn.execute(
+                "INSERT INTO v5_due_settlements "
+                "(customer_phone, amount_paid, payment_method, receipt_no, handled_by) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (phone, amount_paid, payment_method, receipt_no, handled_by)
+            )
+            
+            # Record audit log
+            import json
+            payload = json.dumps({
+                "amount": amount_paid,
+                "mode": payment_method,
+                "receipt": receipt_no,
+                "prev_due_approx": current_due, # Memory snapshot at time of UI interaction
+                "new_due": actual_new_due # Guaranteed accurate DB value
+            })
+            conn.execute(
+                "INSERT INTO v5_audit_log (actor, action, entity_type, entity_id, payload) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (handled_by, "due_settlement", "customer", phone, payload)
+            )
+            
+        self._invalidate_customer_cache(phone)
+        
+        return {
+            "success": True,
+            "receipt_no": receipt_no,
+            "previous_due": actual_new_due + amount_paid,
+            "amount_paid": amount_paid,
+            "new_due": actual_new_due,
+            "payment_method": payment_method,
+            "customer_name": customer.get("name", "Unknown"),
+            "customer_phone": phone,
+            "handled_by": handled_by,
+            "date": datetime.datetime.now().strftime("%d-%m-%Y %I:%M %p")
+        }
+

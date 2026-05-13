@@ -9,6 +9,7 @@ from shared.context_menu.dto import ContextMenuActionDTO, ContextMenuItemDTO, Co
 class InventoryContextAction:
     EDIT = "inventory.row.edit"
     ADD_STOCK = "inventory.row.add_stock"
+    REDUCE_STOCK = "inventory.row.reduce_stock"
     COPY_ITEM_NAME = "inventory.row.copy_item_name"
     COPY_BARCODE = "inventory.row.copy_barcode"
     COPY_QTY = "inventory.row.copy_qty"
@@ -44,6 +45,7 @@ def get_sections() -> tuple[ContextMenuSectionDTO, ...]:
             items=(
                 _action(InventoryContextAction.EDIT, "Edit product", "F2"),
                 _action(InventoryContextAction.ADD_STOCK, "Add stock"),
+                _action(InventoryContextAction.REDUCE_STOCK, "Reduce stock (Damage/Wastage)"),
             ),
         ),
         ContextMenuSectionDTO(

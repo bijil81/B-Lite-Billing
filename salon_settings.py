@@ -28,7 +28,7 @@ from secure_store import (
 )
 from whatsapp_api.provider_factory import create_provider
 from multibranch.sync_manager import MultiBranchSyncManager
-from ui_responsive import get_responsive_metrics, scaled_value
+from ui_responsive import _bind_mousewheel, get_responsive_metrics, scaled_value
 from src.blite_v6.settings.bill_gst import (
     bill_gst_saved_message,
     build_bill_gst_payload,
@@ -62,6 +62,11 @@ from src.blite_v6.settings.preferences import (
     preferences_saved_message,
 )
 from src.blite_v6.settings.billing_alert_preferences import ALERT_PREF_KEY
+from src.blite_v6.settings.zoom_preferences import (
+    BILLING_WORKFLOW_ZOOM_LABELS,
+    billing_workflow_zoom_label,
+    clamp_global_zoom,
+)
 from src.blite_v6.settings.license_actions import license_activation_action_view
 from src.blite_v6.settings.notifications import (
     build_notifications_payload,
@@ -272,6 +277,7 @@ class SettingsFrame(tk.Frame):
         for key, tab in self._tabs.items():
             if str(tab) == current:
                 self._ensure_tab(key)
+                self._reset_tab_scroll(key)
                 return
         if self._print_tab is not None and str(self._print_tab) == current:
             self._ensure_print_tab()
@@ -285,6 +291,7 @@ class SettingsFrame(tk.Frame):
         try:
             builder()
             self._tab_loaded.add(key)
+            self.after_idle(lambda k=key: self._reset_tab_scroll(k))
         except Exception as e:
             app_log(f"[Settings tab:{key}] {e}")
             host = self._tabs.get(key)
@@ -300,14 +307,39 @@ class SettingsFrame(tk.Frame):
                     bg=C["bg"],
                     fg=C["red"],
                     justify="left",
-                ).pack(anchor="w")
+            ).pack(anchor="w")
+
+    def _reset_tab_scroll(self, key: str):
+        try:
+            meta = self._scroll_meta.get(key, {})
+            canvas = meta.get("canvas")
+            if canvas is not None and canvas.winfo_exists():
+                canvas.yview_moveto(0)
+                canvas.xview_moveto(0)
+        except Exception as e:
+            app_log(f"[_reset_tab_scroll {key}] {e}")
+
+    def sync_zoom_controls(self, cfg: dict | None = None):
+        try:
+            cfg = cfg or get_settings()
+            if hasattr(self, "_ui_scale"):
+                self._ui_scale.set(clamp_global_zoom(cfg.get("ui_scale", 1.0)))
+            if hasattr(self, "_billing_workflow_zoom"):
+                self._billing_workflow_zoom.set(
+                    billing_workflow_zoom_label(cfg.get("billing_workflow_zoom", "fit"))
+                )
+        except Exception as e:
+            app_log(f"[sync_zoom_controls] {e}")
 
     def _ensure_print_tab(self):
         if self._print_tab is None or "print" in self._tab_loaded:
             return
         try:
             from print_templates import PrintSettingsPanel
-            PrintSettingsPanel(self._print_tab).pack(fill=tk.BOTH, expand=True)
+            PrintSettingsPanel(
+                self._print_tab,
+                on_save=self._apply_print_settings_runtime,
+            ).pack(fill=tk.BOTH, expand=True)
             self._tab_loaded.add("print")
         except Exception as e:
             app_log(f"[Print Settings tab] {e}")
@@ -323,6 +355,16 @@ class SettingsFrame(tk.Frame):
                 fg=C["red"],
                 justify="left",
             ).pack(anchor="w")
+
+    def _apply_print_settings_runtime(self):
+        try:
+            billing = getattr(self.app, "billing", None)
+            if billing is not None and hasattr(billing, "_refresh_bill_safe"):
+                billing._refresh_bill_safe()
+            elif billing is not None and hasattr(billing, "_refresh_bill"):
+                billing._refresh_bill()
+        except Exception as e:
+            app_log(f"[_apply_print_settings_runtime] {e}")
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _scroll(self, key: str):
@@ -345,10 +387,7 @@ class SettingsFrame(tk.Frame):
         c.bind("<Configure>",
                lambda e: c.itemconfig(cw, width=e.width))
 
-        def _mw(e):
-            c.yview_scroll(int(-1 * (e.delta / 120)), "units")
-        c.bind("<Enter>", lambda e: c.bind_all("<MouseWheel>", _mw))
-        c.bind("<Leave>", lambda e: c.unbind_all("<MouseWheel>"))
+        _bind_mousewheel(c, f)
         action_bar = tk.Frame(
             shell,
             bg=C["card"],
@@ -1196,6 +1235,7 @@ class SettingsFrame(tk.Frame):
             width_text=self._pwc.get(),
         )
         save_settings(cfg)
+        self._apply_print_settings_runtime()
         messagebox.showinfo("Saved", print_settings_saved_message(cfg))
 
     # ── Tab 5: Security ────────────────────────────────────────────────────────
@@ -1288,6 +1328,63 @@ class SettingsFrame(tk.Frame):
         self._chk(bf, "Enable smooth animations",           self._enable_anim)
         self._chk(bf, "Show below-cost warning banner",     self._show_below_cost_alert)
 
+        zf = self._sec(f, "View & Zoom")
+        self._ui_scale = tk.DoubleVar(value=clamp_global_zoom(cfg.get("ui_scale", 1.0)))
+        self._billing_workflow_zoom = tk.StringVar(
+            value=billing_workflow_zoom_label(cfg.get("billing_workflow_zoom", "fit"))
+        )
+        tk.Label(
+            zf,
+            text="Global App Zoom:",
+            bg=C["bg"],
+            fg=C["muted"],
+            font=("Arial", 11),
+        ).pack(anchor="w", pady=(0, 4))
+        zoom_row = tk.Frame(zf, bg=C["bg"])
+        zoom_row.pack(fill=tk.X, pady=(0, 8))
+        tk.Scale(
+            zoom_row,
+            variable=self._ui_scale,
+            from_=0.85,
+            to=1.25,
+            resolution=0.05,
+            orient=tk.HORIZONTAL,
+            bg=C["bg"],
+            fg=C["text"],
+            troughcolor=C["input"],
+            highlightthickness=0,
+            length=260,
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            zoom_row,
+            text="Ctrl + / Ctrl - also changes this. Default is 1.00.",
+            bg=C["bg"],
+            fg=C["muted"],
+            font=("Arial", 9),
+        ).pack(side=tk.LEFT, padx=(10, 0))
+        tk.Label(
+            zf,
+            text="Billing Workflow View:",
+            bg=C["bg"],
+            fg=C["muted"],
+            font=("Arial", 11),
+        ).pack(anchor="w", pady=(0, 4))
+        ttk.Combobox(
+            zf,
+            textvariable=self._billing_workflow_zoom,
+            values=list(BILLING_WORKFLOW_ZOOM_LABELS.values()),
+            state="readonly",
+            font=("Arial", 11),
+            width=24,
+        ).pack(anchor="w")
+        tk.Label(
+            zf,
+            text="This affects only the left Billing workflow composer. It does not change invoice print size.",
+            bg=C["bg"],
+            fg=C["muted"],
+            font=("Arial", 9),
+        ).pack(anchor="w", pady=(6, 0))
+
         self._v5_customers = tk.BooleanVar(value=cfg.get("use_v5_customers_db", False))
         self._v5_appointments = tk.BooleanVar(value=cfg.get("use_v5_appointments_db", False))
         self._v5_reports = tk.BooleanVar(value=cfg.get("use_v5_reports_db", False))
@@ -1295,8 +1392,13 @@ class SettingsFrame(tk.Frame):
         self._v5_inventory = tk.BooleanVar(value=cfg.get("use_v5_inventory_db", False))
         self._v5_staff = tk.BooleanVar(value=cfg.get("use_v5_staff_db", False))
         self._v5_product_variants = tk.BooleanVar(value=cfg.get("use_v5_product_variants_db", False))
+        self._v5_users = tk.BooleanVar(value=cfg.get("use_v5_users_db", False))
+        self._v5_offers = tk.BooleanVar(value=cfg.get("use_v5_offers_db", False))
+        self._v5_memberships = tk.BooleanVar(value=cfg.get("use_v5_memberships_db", False))
+        self._v5_expenses = tk.BooleanVar(value=cfg.get("use_v5_expenses_db", False))
         if (
             cfg.get("show_database_rollout_controls", False)
+            and not cfg.get("migration_completed", False)
             and getattr(getattr(self.app, "current_user", {}), "get", lambda *_: "")("role", "") == "owner"
         ):
             v5f = self._sec(f, "Advanced: Database Rollout")
@@ -1332,6 +1434,10 @@ class SettingsFrame(tk.Frame):
             self._chk(v5f, "Inventory -> v5 SQLite tables", self._v5_inventory)
             self._chk(v5f, "Staff -> v5 SQLite tables", self._v5_staff)
             self._chk(v5f, "Product Variants -> v5 SQLite tables", self._v5_product_variants)
+            self._chk(v5f, "Users -> v5 SQLite tables", self._v5_users)
+            self._chk(v5f, "Offers -> v5 SQLite tables", self._v5_offers)
+            self._chk(v5f, "Memberships -> v5 SQLite tables", self._v5_memberships)
+            self._chk(v5f, "Expenses -> v5 SQLite tables", self._v5_expenses)
             tk.Label(v5f,
                      text="Use these only after migration validation. Turn off a switch to fall back quickly.",
                      bg=C["bg"], fg=C["muted"],
@@ -1366,6 +1472,8 @@ class SettingsFrame(tk.Frame):
             show_ai_floating_button=self._show_ai_btn.get(),
             enable_animations=self._enable_anim.get(),
             show_below_cost_alert=self._show_below_cost_alert.get(),
+            ui_scale=self._ui_scale.get(),
+            billing_workflow_zoom=self._billing_workflow_zoom.get(),
             use_v5_customers_db=self._v5_customers.get(),
             use_v5_appointments_db=self._v5_appointments.get(),
             use_v5_reports_db=self._v5_reports.get(),
@@ -1373,6 +1481,10 @@ class SettingsFrame(tk.Frame):
             use_v5_inventory_db=self._v5_inventory.get(),
             use_v5_staff_db=self._v5_staff.get(),
             use_v5_product_variants_db=self._v5_product_variants.get(),
+            use_v5_users_db=self._v5_users.get(),
+            use_v5_offers_db=self._v5_offers.get(),
+            use_v5_memberships_db=self._v5_memberships.get(),
+            use_v5_expenses_db=self._v5_expenses.get(),
             start_with_windows=self._start_win.get(),
             default_report_period=self._def_rep.get(),
         )
@@ -1538,6 +1650,10 @@ class SettingsFrame(tk.Frame):
             feature_multibranch=self._feature_multibranch.get(),
             whatsapp_api_config=wa_cfg,
             multibranch_config=mb_cfg,
+            sidebar_module_visibility={
+                key: bool(var.get())
+                for key, var in getattr(self, "_sidebar_module_vars", {}).items()
+            },
         )
         save_settings(cfg)
         self._sync_optional_tabs(cfg)

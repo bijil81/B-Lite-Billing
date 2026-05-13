@@ -57,3 +57,11 @@ class StaffRepository:
                     payload.get("notes", ""),
                 ),
             )
+
+    def deactivate_staff(self, legacy_name: str) -> None:
+        ensure_v5_schema()
+        with connection_scope() as conn:
+            conn.execute(
+                "UPDATE v5_staff SET active = 0, updated_at = datetime('now') WHERE legacy_name = ?",
+                (legacy_name,),
+            )

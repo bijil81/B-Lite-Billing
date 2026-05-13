@@ -1,22 +1,23 @@
 """
-admin.py  —  BOBY'S Salon : Admin panel (services, products, users)
+admin.py  ---  BOBY'S Salon : Admin panel (services, products, users)
 FIXES:
   - Bug 12: added current_user parameter to __init__
   - Bug 11: _close() with proper grab_release + protocol handler
   - Bug 10: smart search closure pattern is correct (kept as-is)
-  - Fix R9a: app_log imported — errors logged to app_debug.log
-  - Fix R9b: _load_db() try/except — crash prevention
-  - Fix R9c: _save_db() try/except + app_log — save failure logged
-  - Fix R9d: __init__ try/except — admin panel open failure logged
-  - Fix R9e: _build() try/except — UI build failure logged
-  - Fix R9f: add_cat() try/except — error shown to user
-  - Fix R9g: del_cat() try/except — error shown to user
-  - Fix R9h: load_items() try/except — crash prevention
-  - Fix R9i: save_item() try/except — save failure logged + user notified
-  - Fix R9j: delete_item() try/except — delete failure logged
-  - Fix R9k: _build_users_tab() try/except — crash prevention
+  - Fix R9a: app_log imported --- errors logged to app_debug.log
+  - Fix R9b: _load_db() try/except --- crash prevention
+  - Fix R9c: _save_db() try/except + app_log --- save failure logged
+  - Fix R9d: __init__ try/except --- admin panel open failure logged
+  - Fix R9e: _build() try/except --- UI build failure logged
+  - Fix R9f: add_cat() try/except --- error shown to user
+  - Fix R9g: del_cat() try/except --- error shown to user
+  - Fix R9h: load_items() try/except --- crash prevention
+  - Fix R9i: save_item() try/except --- save failure logged + user notified
+  - Fix R9j: delete_item() try/except --- delete failure logged
+  - Fix R9k: _build_users_tab() try/except --- crash prevention
 """
 import json
+import os
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 from utils import (C, load_json, save_json, F_SERVICES,
@@ -36,11 +37,12 @@ from adapters.product_catalog_adapter import (
 from help_system import show_context_help
 from branding import get_app_name
 from services_v5.inventory_service import InventoryService
+from src.blite_v6.text_normalization import smart_title_name
 from validators.product_validator import build_pack_label
 
 
 def _load_db():
-    """Fix R9b: try/except — returns empty dicts on failure."""
+    """Fix R9b: try/except --- returns empty dicts on failure."""
     try:
         data = load_json(F_SERVICES, {})
         if "Services" in data or "Products" in data:
@@ -67,24 +69,40 @@ def _product_display_name(name: str, brand: str = "", pack_size: str = "", unit:
     return " ".join(p for p in parts if p).strip()
 
 
-def _normalize_import_rows(payload) -> list[dict]:
+def _normalize_import_rows(payload, section: str | None = None) -> list[dict]:
+    """Normalize import rows, selecting the active tab section from old DB files."""
+    def _rows_from_legacy_section(section_payload, *, product_rows: bool) -> list[dict]:
+        normalized = []
+        if isinstance(section_payload, dict):
+            for category, items in section_payload.items():
+                if isinstance(items, dict):
+                    for item_name, price in items.items():
+                        row = {
+                            "Item Name": item_name,
+                            "Category": category,
+                            "Price": price,
+                        }
+                        if product_rows:
+                            row.update({"Stock": 0, "Unit": "pcs"})
+                        normalized.append(row)
+        return normalized
+
     rows = []
     if isinstance(payload, list):
         rows = payload
     elif isinstance(payload, dict):
         if isinstance(payload.get("items"), list):
             rows = payload["items"]
-        elif isinstance(payload.get("Products"), dict):
-            for category, items in payload["Products"].items():
-                if isinstance(items, dict):
-                    for item_name, price in items.items():
-                        rows.append({
-                            "Item Name": item_name,
-                            "Category": category,
-                            "Price": price,
-                            "Stock": 0,
-                            "Unit": "pcs",
-                        })
+        else:
+            selected = str(section or "").strip().lower()
+            if selected.startswith("product"):
+                rows = _rows_from_legacy_section(payload.get("Products"), product_rows=True)
+            elif selected.startswith("service"):
+                rows = _rows_from_legacy_section(payload.get("Services"), product_rows=False)
+            elif isinstance(payload.get("Products"), dict):
+                rows = _rows_from_legacy_section(payload.get("Products"), product_rows=True)
+            elif isinstance(payload.get("Services"), dict):
+                rows = _rows_from_legacy_section(payload.get("Services"), product_rows=False)
     return [row for row in rows if isinstance(row, dict)]
 
 
@@ -135,7 +153,15 @@ def _inventory_sync_payload(
 class AdminPanel:
     """Opens the admin panel as a Toplevel window."""
 
-    def __init__(self, parent, on_close=None, current_user=None):
+    def __init__(
+        self,
+        parent,
+        on_close=None,
+        on_users_changed=None,
+        on_catalog_changed=None,
+        initial_tab: str | None = None,
+        current_user=None,
+    ):
         # H11 FIX: Reject missing current_user instead of silently defaulting
         # to owner. Defaulting to owner was a privilege escalation risk -- if
         # any caller passed None (e.g., due to a bug), the user would get
@@ -153,8 +179,15 @@ class AdminPanel:
         # Bug 12 fix: accept and store current_user
         self.parent       = parent
         self.on_close     = on_close
+        self.on_users_changed = on_users_changed
+        self.on_catalog_changed = on_catalog_changed
+        self.initial_tab = str(initial_tab or "").strip().lower() or None
         self._responsive  = get_responsive_metrics(parent.winfo_toplevel())
         self.current_user = current_user
+        self._tab_notebook = None
+        self._tab_index_map = {}
+        self._admin_header_actions = None
+        self._catalog_header_actions = {}
 
         self.svc_data, self.prd_data = _load_db()
 
@@ -178,17 +211,17 @@ class AdminPanel:
         """Safe close: release grab, run callback, destroy window."""
         try:
             self.win.grab_release()
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[AdminPanel._close] grab_release failed: {e}")
         try:
             if callable(self.on_close):
                 self.on_close()
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[AdminPanel._close] on_close callback failed: {e}")
         try:
             self.win.destroy()
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[AdminPanel._close] win.destroy failed: {e}")
 
     def _build(self):
         top = tk.Frame(self.win, bg=C["bg"])
@@ -204,9 +237,12 @@ class AdminPanel:
             radius=8,
             font=("Arial", scaled_value(10, 10, 9), "bold"),
         ).pack(side=tk.RIGHT)
+        self._admin_header_actions = tk.Frame(top, bg=C["bg"])
+        self._admin_header_actions.pack(side=tk.RIGHT, padx=(0, 10))
 
         nb = ttk.Notebook(self.win)
         nb.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self._tab_notebook = nb
 
         t_svc = tk.Frame(nb, bg=C["bg"])
         t_prd = tk.Frame(nb, bg=C["bg"])
@@ -217,49 +253,100 @@ class AdminPanel:
         nb.add(t_prd, text="Products")
         nb.add(t_usr, text="Users")
         nb.add(t_bu, text="Backup & Logs")
+        self._tab_index_map = {
+            "services": 0,
+            "products": 1,
+            "users": 2,
+            "backup": 3,
+            "backup_logs": 3,
+            "backup & logs": 3,
+        }
 
         self._build_tab(t_svc, self.svc_data, "Services")
         self._build_tab(t_prd, self.prd_data, "Products")
         self._build_users_tab(t_usr)
         self._build_backup_tab(t_bu)
+        nb.bind("<<NotebookTabChanged>>", lambda _event: self._sync_header_actions(), add="+")
+        self.select_tab(self.initial_tab)
+        self._sync_header_actions()
 
-    # ─────────── Services / Products tab ────────────
+    def _sync_header_actions(self):
+        try:
+            for btn in self._catalog_header_actions.values():
+                btn.pack_forget()
+            if self._tab_notebook is None:
+                return
+            selected = self._tab_notebook.select()
+            if not selected:
+                return
+            tab_text = str(self._tab_notebook.tab(selected, "text")).strip().lower()
+            btn = self._catalog_header_actions.get(tab_text)
+            if btn is not None:
+                btn.pack(side=tk.RIGHT)
+        except Exception as e:
+            app_log(f"[AdminPanel._sync_header_actions] {e}")
+
+    def select_tab(self, tab_key: str | None):
+        key = str(tab_key or "").strip().lower()
+        if not key:
+            return
+        try:
+            idx = self._tab_index_map.get(key)
+            if idx is None or self._tab_notebook is None:
+                return
+            self._tab_notebook.select(idx)
+        except Exception as e:
+            app_log(f"[AdminPanel.select_tab] {e}")
+
+    # --------------------------------- Services / Products tab ------------------------------------
     def _build_tab(self, parent, data_ref: dict, label: str):
         content, _, _ = make_scrollable(parent, bg=C["bg"], padx=0, pady=0)
 
-        top = tk.Frame(content, bg=C["bg"], pady=8)
+        def _notify_catalog_changed():
+            try:
+                if callable(self.on_catalog_changed):
+                    self.on_catalog_changed()
+            except Exception as e:
+                app_log(f"[AdminPanel._notify_catalog_changed] {e}")
+
+        top = tk.Frame(content, bg=C["bg"], pady=2)
         top.pack(fill=tk.X, padx=10)
         for col in range(4):
             top.grid_columnconfigure(col, weight=1 if col in (1, 3) else 0)
 
         tk.Label(top, text="Category:", font=("Arial", 12, "bold"),
                  bg=C["bg"], fg=C["text"]).grid(
-                     row=0, column=0, padx=(0, 8), pady=4, sticky="w")
+                     row=0, column=0, padx=(0, 8), pady=2, sticky="w")
         cat_var = tk.StringVar()
         cat_cb  = ttk.Combobox(top, textvariable=cat_var,
                                 state="readonly", width=22)
-        cat_cb.grid(row=0, column=1, padx=(0, 12), pady=4, sticky="ew")
+        cat_cb.grid(row=0, column=1, padx=(0, 12), pady=2, sticky="ew")
         cat_cb["values"] = ["All"]
 
         tk.Label(top, text="New Category:", font=("Arial", 12),
                  bg=C["bg"], fg=C["muted"]).grid(
-                     row=0, column=2, padx=(0, 8), pady=4, sticky="w")
+                     row=0, column=2, padx=(0, 8), pady=2, sticky="w")
         new_cat = tk.Entry(top, width=20, font=("Arial", 12),
                            bg=C["input"], fg=C["text"], bd=0,
                            insertbackground=C["accent"])
-        new_cat.grid(row=0, column=3, padx=(0, 6), pady=4, ipady=4, sticky="ew")
+        new_cat.grid(row=0, column=3, padx=(0, 6), pady=2, ipady=4, sticky="ew")
 
         def add_cat():
-            nm = new_cat.get().strip()
+            nm = smart_title_name(new_cat.get())
             if not nm:
                 messagebox.showerror("Error", "Enter name."); return
-            if nm in data_ref:
+            if any(str(existing).strip().lower() == nm.lower() for existing in data_ref):
                 messagebox.showerror("Error", "Already exists."); return
             try:
                 data_ref[nm] = {}
+                ok = _save_db(self.svc_data, self.prd_data)
+                if not ok:
+                    data_ref.pop(nm, None)
+                    raise RuntimeError("Could not save category")
                 refresh_cats()
                 cat_var.set(nm)
                 load_items()
+                _notify_catalog_changed()
                 new_cat.delete(0, tk.END)
             except Exception as e:
                 app_log(f"[add_cat] {e}")
@@ -268,27 +355,41 @@ class AdminPanel:
         def del_cat():
             c = cat_var.get().strip()
             if not c: return
-            if messagebox.askyesno("Delete",
-                                   f"Delete '{c}' and ALL its items?"):
+            if c == "All":
+                messagebox.showerror("Error", "Select a category to delete.")
+                return
+            if messagebox.askyesno(
+                "Delete Category",
+                f"Delete category '{c}' and all items inside it?\n\nThis cannot be undone.",
+            ):
                 try:
                     data_ref.pop(c, None)
                     _save_db(self.svc_data, self.prd_data)
                     refresh_cats()
                     load_items()
+                    _notify_catalog_changed()
                 except Exception as e:
                     app_log(f"[del_cat] {e}")
                     messagebox.showerror("Error", f"Could not delete category: {e}")
 
-        ModernButton(top, text="Add", command=add_cat,
+        if self._admin_header_actions is not None:
+            delete_selected_btn = ModernButton(
+                self._admin_header_actions,
+                text="Delete Category",
+                command=del_cat,
+                color=C["red"],
+                hover_color="#c0392b",
+                width=scaled_value(132, 116, 100),
+                height=scaled_value(30, 30, 26),
+                radius=8,
+                font=("Arial", scaled_value(10, 10, 9), "bold"),
+            )
+            self._catalog_header_actions[label.lower()] = delete_selected_btn
+        ModernButton(top, text="Add Category", command=add_cat,
                      color=C["teal"], hover_color=C["blue"],
-                     width=scaled_value(84, 76, 64), height=scaled_value(30, 30, 26), radius=8,
+                     width=scaled_value(132, 116, 100), height=scaled_value(30, 30, 26), radius=8,
                      font=("Arial", scaled_value(10, 10, 9), "bold"),
-                     ).grid(row=1, column=1, padx=(0, 4), pady=(6, 0), sticky="w")
-        ModernButton(top, text="Delete Category", command=del_cat,
-                     color=C["red"], hover_color="#c0392b",
-                     width=scaled_value(112, 98, 86), height=scaled_value(30, 30, 26), radius=8,
-                     font=("Arial", scaled_value(10, 10, 9), "bold"),
-                     ).grid(row=1, column=3, padx=(0, 4), pady=(6, 0), sticky="w")
+                     ).grid(row=1, column=3, padx=(0, 6), pady=(2, 0), sticky="e")
 
         search_bar = tk.Frame(content, bg=C["bg"])
         search_bar.pack(fill=tk.X, padx=10, pady=(4, 2))
@@ -306,7 +407,7 @@ class AdminPanel:
             tree_columns = ("name", "brand", "category", "variant", "price", "stock")
         self._admin_tree_cols = tree_columns
         tree = ttk.Treeview(content, columns=tree_columns,
-                            show="headings", height=12 if product_mode else 14)
+                            show="headings", height=11 if product_mode else 13)
         if product_mode:
             tree.heading("name", text="Product Name", anchor="w")
             tree.heading("brand", text="Brand", anchor="w")
@@ -376,7 +477,7 @@ class AdminPanel:
             stock_e.insert(0, "0")
             stock_e.grid(row=2, column=3, padx=5, pady=5, ipady=4, sticky="ew")
 
-        # ── Smart Search on name_e ──────────────────
+        # ------ Smart Search on name_e ------------------------------------------------------
         _ss = {"win": None, "lb": None, "items": []}
 
         def _adm_typing(e=None, _ss_ref=_ss):
@@ -417,8 +518,9 @@ class AdminPanel:
                 try:
                     win.transient(self.win.winfo_toplevel())
                     win.lift(self.win.winfo_toplevel())
-                except Exception:
-                    pass
+                except Exception as e:
+                    app_log(f"[_adm_show] win.lift failed: {e}")
+
                 _ss_ref["win"] = win
                 lb = tk.Listbox(win, font=("Arial", 10),
                                 bg=C["card"], fg=C["text"],
@@ -452,8 +554,8 @@ class AdminPanel:
                 lb.bind("<Up>", lambda e: _adm_move(-1, _ss_ref))
                 lb.bind("<Down>", lambda e: _adm_move(1, _ss_ref))
                 lb.bind("<Escape>", lambda e: _adm_hide(_ss_ref) or "break")
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_adm_show] popup creation failed: {e}")
 
         def _adm_hide(_ss_ref=_ss):
             try:
@@ -461,8 +563,8 @@ class AdminPanel:
                     _ss_ref["win"].destroy()
                     _ss_ref["win"] = None
                     _ss_ref["lb"]  = None
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_adm_hide] failed: {e}")
 
         def _adm_move(delta, _ss_ref=_ss):
             lb = _ss_ref.get("lb")
@@ -575,7 +677,7 @@ class AdminPanel:
             sel = tree.selection()
             if not sel: return
             meta = table_meta.get(sel[0], {})
-            v = tree.item(sel[0], "values")
+            v = tuple(tree.item(sel[0], "values") or ())
             if product_mode and meta.get("source") == "v5":
                 row = meta.get("row", {})
                 name_e.delete(0, tk.END)
@@ -596,20 +698,50 @@ class AdminPanel:
                 if row.get("category_name"):
                     cat_var.set(row.get("category_name"))
             else:
+                name = str(v[0] if len(v) > 0 else meta.get("name", "")).strip()
+                if not name:
+                    return
+                if product_mode:
+                    price = v[4] if len(v) > 4 else (v[1] if len(v) > 1 else "")
+                    brand = v[1] if len(v) > 4 else ""
+                    category = v[2] if len(v) > 2 else meta.get("category", "")
+                    variant = v[3] if len(v) > 3 else ""
+                    stock = v[5] if len(v) > 5 else "0"
+                else:
+                    price = v[1] if len(v) > 1 else ""
+                    brand = category = variant = stock = ""
                 name_e.delete(0, tk.END)
-                name_e.insert(0, v[0])
+                name_e.insert(0, name)
                 price_e.delete(0, tk.END)
-                price_e.insert(0, str(v[1] if not product_mode else v[4]))
+                price_e.insert(0, str(price))
+                if product_mode:
+                    if brand_e:
+                        brand_e.delete(0, tk.END)
+                        brand_e.insert(0, str(brand))
+                    if pack_e:
+                        pack_e.delete(0, tk.END)
+                        pack_e.insert(0, str(variant))
+                    if unit_cb:
+                        unit_var.set("pcs")
+                    if stock_e:
+                        stock_e.delete(0, tk.END)
+                        stock_e.insert(0, str(stock))
+                    if category:
+                        cat_var.set(str(category))
 
         tree.bind("<<TreeviewSelect>>", on_tree_select)
 
         # Buttons
         bb = tk.Frame(content, bg=C["bg"])
         bb.pack(fill=tk.X, padx=10, pady=6)
+        primary_actions = tk.Frame(bb, bg=C["bg"])
+        primary_actions.pack(side=tk.LEFT)
+        utility_actions = tk.Frame(bb, bg=C["bg"])
+        utility_actions.pack(side=tk.RIGHT)
 
         def save_item():
-            cat   = cat_var.get()
-            nm    = name_e.get().strip()
+            cat   = smart_title_name(cat_var.get())
+            nm    = smart_title_name(name_e.get())
             pr_s  = price_e.get().strip()
             if not cat or cat == "All":
                 messagebox.showerror("Error", "Select a category."); return
@@ -668,6 +800,7 @@ class AdminPanel:
                 build_item_codes(force=True)
                 refresh_product_catalog_cache()
                 load_items()
+                _notify_catalog_changed()
                 name_e.delete(0, tk.END)
                 price_e.delete(0, tk.END)
                 if brand_e:
@@ -703,6 +836,7 @@ class AdminPanel:
                     build_item_codes(force=True)
                     refresh_product_catalog_cache()
                     load_items()
+                    _notify_catalog_changed()
                 except Exception as e:
                     app_log(f"[delete_item] {e}")
                     messagebox.showerror("Error", f"Could not delete item: {e}")
@@ -717,8 +851,8 @@ class AdminPanel:
                 size = os.path.getsize(path)
                 if size > IMPORT_MAX_FILE_SIZE:
                     return f"File too large ({size // 1024}KB). Maximum allowed: {IMPORT_MAX_FILE_SIZE // 1024}KB."
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_validate_import_file_size] failed for {path}: {e}")
             return None
 
         def _sanitize_import_string(value: str, field: str = "value", max_len: int = 200) -> str:
@@ -761,7 +895,7 @@ class AdminPanel:
             try:
                 with open(path, "r", encoding="utf-8") as fh:
                     payload = json.load(fh)
-                rows = _normalize_import_rows(payload)
+                rows = _normalize_import_rows(payload, "Products" if product_mode else "Services")
 
                 # H9 FIX: Limit number of rows to prevent DoS
                 if len(rows) > IMPORT_MAX_ROWS:
@@ -849,6 +983,7 @@ class AdminPanel:
                 refresh_product_catalog_cache()
                 refresh_cats()
                 load_items()
+                _notify_catalog_changed()
                 _show_import_summary("Import Complete", path, summary)
             except Exception as e:
                 app_log(f"[import_json_items] {e}")
@@ -977,6 +1112,7 @@ class AdminPanel:
                 refresh_product_catalog_cache()
                 refresh_cats()
                 load_items()
+                _notify_catalog_changed()
                 _show_import_summary("Import Complete", path, summary)
             except Exception as e:
                 app_log(f"[import_excel_items] {e}")
@@ -993,34 +1129,37 @@ class AdminPanel:
             ("Delete Item",   C["red"],  "#c0392b", delete_item),
         ]:
             btn_icon = save_icon if txt == "Save / Update" else delete_icon
-            ModernButton(bb, text=txt, image=btn_icon, compound="left", command=cmd,
+            ModernButton(primary_actions, text=txt, image=btn_icon, compound="left", command=cmd,
                          color=clr, hover_color=hclr,
                          width=scaled_value(150, 132, 112), height=scaled_value(34, 32, 28), radius=8,
                           font=("Arial", scaled_value(10, 10, 9), "bold"),
                           ).pack(side=tk.LEFT, padx=3)
-        if product_mode:
-            ModernButton(bb, text="Refresh", image=refresh_icon, compound="left", command=load_items,
-                         color=C["blue"], hover_color="#154360",
-                         width=scaled_value(120, 110, 96), height=scaled_value(34, 32, 28), radius=8,
-                         font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT, padx=3)
-            ModernButton(bb, text="Import JSON", image=json_icon, compound="left", command=import_json_items,
-                         color=C["purple"], hover_color="#6c4ccf",
-                         width=scaled_value(132, 118, 100), height=scaled_value(34, 32, 28), radius=8,
-                         font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT, padx=3)
-            ModernButton(bb, text="Import Excel", image=excel_icon, compound="left", command=import_excel_items,
-                         color=C["orange"], hover_color="#d97a00",
-                         width=scaled_value(132, 118, 100), height=scaled_value(34, 32, 28), radius=8,
-                         font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT, padx=3)
+        ModernButton(utility_actions, text="Refresh", image=refresh_icon, compound="left", command=load_items,
+                     color=C["blue"], hover_color="#154360",
+                     width=scaled_value(120, 110, 96), height=scaled_value(34, 32, 28), radius=8,
+                     font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT, padx=3)
+        ModernButton(utility_actions, text="Import JSON", image=json_icon, compound="left", command=import_json_items,
+                     color=C["purple"], hover_color="#6c4ccf",
+                     width=scaled_value(132, 118, 100), height=scaled_value(34, 32, 28), radius=8,
+                     font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT, padx=3)
+        ModernButton(utility_actions, text="Import Excel", image=excel_icon, compound="left", command=import_excel_items,
+                     color=C["orange"], hover_color="#d97a00",
+                     width=scaled_value(132, 118, 100), height=scaled_value(34, 32, 28), radius=8,
+                     font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT, padx=3)
 
         refresh_cats()
         load_items()
 
-    # ─────────── Users tab ────────────
+    # --------------------------------- Users tab ------------------------------------
     def _build_users_tab(self, parent):
         # Bug 12 fix: use self.current_user (now properly initialized)
         def _open_user_mgr():
             try:
-                UserManagerWindow(self.win, self.current_user)
+                UserManagerWindow(
+                    self.win,
+                    self.current_user,
+                    on_users_changed=self.on_users_changed,
+                )
             except Exception as e:
                 app_log(f"[_build_users_tab] open user manager: {e}")
                 messagebox.showerror("Error", f"Could not open User Management: {e}")
@@ -1060,9 +1199,9 @@ class AdminPanel:
         for col, val in col_map.items():
             tree.column(col, width=val)
 
-    # ─────────── Backup & Logs tab ────────────
+    # --------------------------------- Backup & Logs tab ------------------------------------
     def _build_backup_tab(self, parent):
-        """V5.6.1 Phase 1 — Backup & Activity quick-access."""
+        """V5.6.1 Phase 1 --- Backup & Activity quick-access."""
         from scheduled_backup import get_scheduled_config, run_scheduled_backup
         from backup_system import sync_offline_backup, normalize_backup_folder, get_backup_config
 
@@ -1155,5 +1294,3 @@ class AdminPanel:
             cnt = 0
         tk.Label(f, text=f"Total activity entries: {cnt}", bg=C["bg"], fg=C["muted"],
                  font=("Arial", 10)).pack(anchor="w", pady=(0, 8))
-
-

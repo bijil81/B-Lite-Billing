@@ -1,7 +1,6 @@
 """Offline backup and restore support."""
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sqlite3
@@ -28,6 +27,8 @@ from utils import (
     F_STAFF,
     F_USERS,
     app_log,
+    load_json,
+    save_json,
 )
 from branding import get_app_name, get_backup_folder_name
 
@@ -71,11 +72,9 @@ def _default_cfg() -> dict:
 def get_backup_config() -> dict:
     cfg = _default_cfg()
     try:
-        if os.path.exists(F_BACKUP_CFG):
-            with open(F_BACKUP_CFG, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-                if isinstance(raw, dict):
-                    cfg.update(raw)
+        raw = load_json(F_BACKUP_CFG, {})
+        if isinstance(raw, dict):
+            cfg.update(raw)
     except Exception as e:
         app_log(f"[backup_config read] {e}")
     return cfg
@@ -84,8 +83,8 @@ def get_backup_config() -> dict:
 def save_backup_config(cfg: dict) -> None:
     final_cfg = {**_default_cfg(), **(cfg or {})}
     try:
-        with open(F_BACKUP_CFG, "w", encoding="utf-8") as f:
-            json.dump(final_cfg, f, indent=2, ensure_ascii=False)
+        if not save_json(F_BACKUP_CFG, final_cfg):
+            app_log("[backup_config write] save_json returned False")
     except Exception as e:
         app_log(f"[backup_config write] {e}")
 

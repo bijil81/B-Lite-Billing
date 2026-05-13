@@ -66,6 +66,13 @@ def main() -> int:
     pytest_cmd = _pytest_command()
     existing_targets = [target for target in PYTEST_TARGETS if (ROOT / target).exists()]
     missing_targets = [target for target in PYTEST_TARGETS if not (ROOT / target).exists()]
+    skipped_targets: list[str] = []
+
+    # Admin-only licensing tooling is intentionally excluded from production bundles.
+    # Skip its direct tests if the module is not present in this workspace.
+    if "tests/test_licensing_admin_keygen.py" in existing_targets and not (ROOT / "licensing_admin").exists():
+        existing_targets.remove("tests/test_licensing_admin_keygen.py")
+        skipped_targets.append("tests/test_licensing_admin_keygen.py")
 
     if not existing_targets:
         summary = {
@@ -97,6 +104,7 @@ def main() -> int:
     summary = {
         "pytest_targets": existing_targets,
         "missing_targets": missing_targets,
+        "skipped_targets": skipped_targets,
         "pytest_command": command[: len(pytest_cmd)],
         "returncode": result.returncode,
         "ok": result.returncode == 0,

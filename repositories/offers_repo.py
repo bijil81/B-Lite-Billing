@@ -88,4 +88,9 @@ class OffersRepository:
     def delete_offer(self, legacy_name: str) -> None:
         ensure_v5_schema()
         with connection_scope() as conn:
+            conn.execute("UPDATE v5_offers SET active = 0, updated_at = datetime('now') WHERE legacy_name = ?", (legacy_name,))
+
+    def hard_delete_offer(self, legacy_name: str) -> None:
+        ensure_v5_schema()
+        with connection_scope() as conn:
             conn.execute("DELETE FROM v5_offers WHERE legacy_name = ?", (legacy_name,))

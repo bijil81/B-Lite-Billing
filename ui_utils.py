@@ -82,6 +82,27 @@ def make_searchable_combobox(combo, full_list):
     def _on_focusin(event):
         _run_filter(open_dropdown=bool(combo.get().strip()))
 
+    def _show_all_values(event=None):
+        _refresh("", open_dropdown=False)
+        combo._searchable_show_all_next = True
+
+    def _on_button_click(event):
+        try:
+            if int(getattr(event, "x", 0)) >= max(0, combo.winfo_width() - 28):
+                _show_all_values(event)
+        except Exception:
+            pass
+
+    def _on_postcommand():
+        try:
+            if getattr(combo, "_searchable_show_all_next", False):
+                combo._searchable_show_all_next = False
+                _refresh("", open_dropdown=False)
+                return
+            _refresh(combo.get(), open_dropdown=False)
+        except Exception:
+            pass
+
     def _on_return(event):
         filtered = getattr(combo, "_searchable_filtered", None) or _filter_values(combo.get())
         if not filtered:
@@ -100,6 +121,13 @@ def make_searchable_combobox(combo, full_list):
         combo.bind("<KeyRelease>", _on_keyrelease, add="+")
         combo.bind("<FocusIn>", _on_focusin, add="+")
         combo.bind("<Return>", _on_return, add="+")
+        combo.bind("<Button-1>", _on_button_click, add="+")
+        combo.bind("<F4>", _show_all_values, add="+")
+        combo.bind("<Alt-Down>", _show_all_values, add="+")
+        try:
+            combo.configure(postcommand=_on_postcommand)
+        except Exception:
+            pass
         combo._searchable_bound = True
 
     combo["values"] = combo._searchable_filtered

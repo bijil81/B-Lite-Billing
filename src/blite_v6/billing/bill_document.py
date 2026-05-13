@@ -55,6 +55,8 @@ def build_bill_data_kwargs(
     applied_redeem_code: str | None,
     now: datetime,
     totals_detail: Any | None = None,
+    wallet_used: float = 0.0,
+    wallet_balance_after: float = 0.0,
 ) -> dict[str, Any]:
     (_service_subtotal, _product_subtotal, total, disc, mem_disc, pts_disc,
      offer_disc, redeem_disc, grand, gst) = totals
@@ -87,6 +89,8 @@ def build_bill_data_kwargs(
         "taxable_amount": getattr(totals_detail, "taxable_amount", round(grand - gst, 2)),
         "gst_mode": getattr(totals_detail, "gst_mode", "global"),
         "gst_breakdown": getattr(totals_detail, "gst_breakdown", ()),
+        "wallet_used": wallet_used,
+        "wallet_balance_after": wallet_balance_after,
         "grand_total": grand,
         "timestamp": now.strftime("%Y-%m-%d %H:%M"),
     }

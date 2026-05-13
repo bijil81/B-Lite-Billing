@@ -11,7 +11,6 @@ Created for V5.6.1 Phase 1 — Safety & Recovery.
 """
 from __future__ import annotations
 
-import json
 import os
 import threading
 from datetime import datetime
@@ -25,7 +24,7 @@ from backup_system import (
     save_backup_config,
 )
 from branding import get_backup_folder_name
-from utils import app_log, DATA_DIR
+from utils import app_log, DATA_DIR, load_json, save_json
 
 # Config file extends the existing offline_backup_config.json
 _F_SCHED_CFG = os.path.join(DATA_DIR, "scheduled_backup_config.json")
@@ -56,11 +55,9 @@ def get_scheduled_config() -> dict:
     """Return merged scheduled backup config."""
     cfg = _default_sched_cfg()
     try:
-        if os.path.exists(_F_SCHED_CFG):
-            with open(_F_SCHED_CFG, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-                if isinstance(raw, dict):
-                    cfg.update(raw)
+        raw = load_json(_F_SCHED_CFG, {})
+        if isinstance(raw, dict):
+            cfg.update(raw)
     except Exception as e:
         app_log(f"[sched_backup config read] {e}")
     return cfg
@@ -70,8 +67,9 @@ def save_scheduled_config(cfg: dict) -> bool:
     """Persist scheduled backup config. Merges with defaults."""
     final = {**_default_sched_cfg(), **(cfg or {})}
     try:
-        with open(_F_SCHED_CFG, "w", encoding="utf-8") as f:
-            json.dump(final, f, indent=2, ensure_ascii=False)
+        if not save_json(_F_SCHED_CFG, final):
+            app_log("[sched_backup config write] save_json returned False")
+            return False
         return True
     except Exception as e:
         app_log(f"[sched_backup config write] {e}")

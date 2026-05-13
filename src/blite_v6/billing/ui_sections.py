@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from src.blite_v6.billing.cart_operations import display_quantity_unit, unit_type_for_variant
 from src.blite_v6.billing.split_layout import billing_left_width
+from ui_responsive import _bind_mousewheel
 
 
 def resolve_billing_mode(settings: dict[str, Any]) -> dict[str, Any]:
@@ -124,11 +125,7 @@ def create_scrollable_panel(parent, width: int, colors: dict[str, str]) -> dict[
     body.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
     canvas.bind("<Configure>", lambda event: canvas.itemconfig(window_id, width=event.width))
 
-    def _scroll(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-    canvas.bind("<Enter>", lambda _event: canvas.bind_all("<MouseWheel>", _scroll))
-    canvas.bind("<Leave>", lambda _event: canvas.unbind_all("<MouseWheel>"))
+    _bind_mousewheel(canvas, body)
 
     return {"outer": outer, "canvas": canvas, "scrollbar": scrollbar, "body": body}
 

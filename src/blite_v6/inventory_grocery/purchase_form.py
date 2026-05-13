@@ -43,13 +43,11 @@ def build_purchase_invoice_payload(raw: Mapping[str, Any]) -> dict[str, Any]:
         "address": _text(raw.get("vendor_address")),
         "opening_balance": raw.get("vendor_opening_balance", 0),
     }
-    payload: dict[str, Any] = {
-        "vendor": vendor,
-        "vendor_id": vendor_id,
-        "invoice_no": _text(raw.get("invoice_no")),
-        "invoice_date": _text(raw.get("invoice_date")),
-        "notes": _text(raw.get("notes")),
-        "items": [
+    raw_items = raw.get("items")
+    if raw_items:
+        items = list(raw_items)
+    else:
+        items = [
             {
                 "item_name": _text(raw.get("item_name")),
                 "qty": raw.get("qty"),
@@ -62,7 +60,14 @@ def build_purchase_invoice_payload(raw: Mapping[str, Any]) -> dict[str, Any]:
                 "batch_no": _text(raw.get("batch_no")),
                 "expiry_date": _text(raw.get("expiry_date")),
             }
-        ],
+        ]
+    payload: dict[str, Any] = {
+        "vendor": vendor,
+        "vendor_id": vendor_id,
+        "invoice_no": _text(raw.get("invoice_no")),
+        "invoice_date": _text(raw.get("invoice_date")),
+        "notes": _text(raw.get("notes")),
+        "items": items,
     }
     if vendor_id and vendor["name"]:
         payload["vendor"] = {"name": vendor["name"]}

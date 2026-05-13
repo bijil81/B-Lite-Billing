@@ -25,6 +25,9 @@ _ADDITIVE_COLUMNS = {
         "is_deleted": "INTEGER DEFAULT 0",
         "deleted_at": "TEXT DEFAULT ''",
         "deleted_by": "TEXT DEFAULT ''",
+        "credit_limit": "REAL DEFAULT 0.0",
+        "current_due": "REAL DEFAULT 0.0",
+        "is_blacklisted": "INTEGER DEFAULT 0",
     },
     "v5_inventory_items": {
         "is_deleted": "INTEGER DEFAULT 0",
@@ -58,6 +61,15 @@ _ADDITIVE_COLUMNS = {
         "purchase_ref": "TEXT DEFAULT ''",
         "batch_no": "TEXT DEFAULT ''",
         "expiry_date": "TEXT DEFAULT ''",
+    },
+    "v5_expenses": {
+        "is_deleted": "INTEGER DEFAULT 0",
+        "deleted_at": "TEXT DEFAULT ''",
+        "deleted_by": "TEXT DEFAULT ''",
+    },
+    "v5_redeem_codes": {
+        "note": "TEXT DEFAULT ''",
+        "used_on": "TEXT DEFAULT ''",
     },
 }
 
@@ -131,3 +143,4 @@ def ensure_v5_schema() -> None:
             "INSERT OR IGNORE INTO schema_migrations(version) VALUES(?)",
             ("v5_additive_columns",)
         )
+    return None

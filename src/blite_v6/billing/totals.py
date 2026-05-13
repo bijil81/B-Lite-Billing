@@ -6,9 +6,49 @@ from typing import Any, Callable, Iterable, Mapping
 from .gst_breakdown import GSTRateSummary, GSTComputation, build_gst_computation
 from ..settings.core import get_settings
 
+# Maximum combined discount allowed as a fraction of total.
+# Prevents discount stacking from producing zero or negative bills.
+_MAX_DISCOUNT_FRACTION: float = 0.90
+
+
+def _cap_combined_discounts(
+    total: float,
+    discount: float,
+    membership_discount: float,
+    points_discount: float,
+    offer_discount: float,
+    redeem_discount: float,
+) -> tuple[float, float, float, float, float, bool]:
+    """Enforce the 90% combined-discount cap.
+
+    Returns the (possibly reduced) discount values and a boolean that is
+    True when the cap was actually triggered.
+    Guarantees: sum of all returned discounts <= total * _MAX_DISCOUNT_FRACTION.
+    """
+    max_allowed = round(total * _MAX_DISCOUNT_FRACTION, 2)
+    combined = discount + membership_discount + points_discount + offer_discount + redeem_discount
+
+    if combined <= max_allowed or total <= 0:
+        return discount, membership_discount, points_discount, offer_discount, redeem_discount, False
+
+    # Scale each discount proportionally so their sum == max_allowed
+    scale = max_allowed / combined if combined > 0 else 0.0
+    return (
+        round(discount * scale, 2),
+        round(membership_discount * scale, 2),
+        round(points_discount * scale, 2),
+        round(offer_discount * scale, 2),
+        round(redeem_discount * scale, 2),
+        True,
+    )
+
 
 OfferCalculator = Callable[[Any, Iterable[Mapping[str, Any]], float], float]
 RedeemCalculator = Callable[[Any, float], float]
+
+
+def _is_due_clearance_item(item: Mapping[str, Any]) -> bool:
+    return bool(item.get("is_due_clearance")) or str(item.get("name", "")).strip().lower() == "previous due clearance"
 
 
 @dataclass(frozen=True)
@@ -27,6 +67,7 @@ class BillingTotals:
     gst_mode: str = "global"
     gst_breakdown: tuple[GSTRateSummary, ...] = ()
     points_customer_missing: bool = False
+    discount_cap_triggered: bool = False
 
     def as_legacy_tuple(self) -> tuple[float, float, float, float, float, float, float, float, float, float]:
         return (
@@ -64,20 +105,24 @@ def calculate_billing_totals(
     gst_category_rate_map: Mapping[str, Any] | None = None,
 ) -> BillingTotals:
     """Calculate billing totals with the same ordering as V5.6 BillingFrame._calc_totals."""
-    service_items = [item for item in items if item["mode"] == "services"]
-    product_items = [item for item in items if item["mode"] == "products"]
+    sale_items = [item for item in items if not _is_due_clearance_item(item)]
+    due_items = [item for item in items if _is_due_clearance_item(item)]
+    service_items = [item for item in sale_items if item["mode"] == "services"]
+    product_items = [item for item in sale_items if item["mode"] == "products"]
     service_subtotal = sum(item["price"] * item["qty"] for item in service_items)
     product_subtotal = sum(item["price"] * item["qty"] for item in product_items)
-    total = service_subtotal + product_subtotal
+    due_subtotal = sum(item["price"] * item["qty"] for item in due_items)
+    discountable_total = service_subtotal + product_subtotal
+    total = discountable_total + due_subtotal
 
     discount = 0.0
     if discount_enabled:
-        discount = min(total, max(0.0, discount_value))
+        discount = min(discountable_total, max(0.0, discount_value))
 
     membership_discount = 0.0
     if membership_disc_pct > 0:
         membership_discount = round(service_subtotal * membership_disc_pct / 100, 2)
-        membership_discount = max(0.0, min(membership_discount, max(0.0, total - discount)))
+        membership_discount = max(0.0, min(membership_discount, max(0.0, discountable_total - discount)))
 
     points_discount = 0.0
     points_customer_missing = False
@@ -85,15 +130,15 @@ def calculate_billing_totals(
         if customer_points is None:
             points_customer_missing = True
         else:
-            remaining_for_points = max(0.0, total - discount - membership_discount)
+            remaining_for_points = max(0.0, discountable_total - discount - membership_discount)
             points_discount = float(min(int(customer_points), int(remaining_for_points)))
 
     offer_discount = 0.0
     if applied_offer and apply_offer_fn:
         offer_discount = apply_offer_fn(
             applied_offer,
-            items,
-            max(0.0, total - discount - membership_discount - points_discount),
+            sale_items,
+            max(0.0, discountable_total - discount - membership_discount - points_discount),
         )
         offer_discount = max(0.0, offer_discount)
 
@@ -101,19 +146,34 @@ def calculate_billing_totals(
     if applied_redeem_code and calc_redeem_discount_fn:
         redeem_discount = calc_redeem_discount_fn(
             applied_redeem_code,
-            max(0.0, total - discount - membership_discount - points_discount - offer_discount),
+            max(0.0, discountable_total - discount - membership_discount - points_discount - offer_discount),
         )
         redeem_discount = max(0.0, redeem_discount)
 
-    grand_total = max(
-        0.0,
-        total - discount - membership_discount - points_discount - offer_discount - redeem_discount,
+    # ------------------------------------------------------------------
+    # Phase 1: Discount stacking cap — enforce 90% maximum
+    # ------------------------------------------------------------------
+    (
+        discount,
+        membership_discount,
+        points_discount,
+        offer_discount,
+        redeem_discount,
+        _cap_triggered,
+    ) = _cap_combined_discounts(
+        discountable_total, discount, membership_discount, points_discount, offer_discount, redeem_discount
     )
+
+    sale_grand_total = max(
+        0.0,
+        discountable_total - discount - membership_discount - points_discount - offer_discount - redeem_discount,
+    )
+    grand_total = round(sale_grand_total + due_subtotal, 2)
     gst_amount = 0.0
     taxable_amount = grand_total
     gst_mode = "item" if product_wise_gst_enabled else "global"
     gst_breakdown: tuple[GSTRateSummary, ...] = ()
-    if gst_enabled and grand_total > 0:
+    if gst_enabled and sale_grand_total > 0:
         gst_source = str(gst_rate_source or "global").strip().lower()
         if not product_wise_gst_enabled and gst_source == "global":
             try:
@@ -121,18 +181,19 @@ def calculate_billing_totals(
             except Exception:
                 rate = 18.0 / 100
             if str(gst_type or "inclusive").strip().lower() == "inclusive":
-                gst_amount = grand_total - (grand_total / (1 + rate))
+                gst_amount = sale_grand_total - (sale_grand_total / (1 + rate))
             else:
-                gst_amount = grand_total * rate
-                grand_total = grand_total + gst_amount
-            taxable_amount = round(grand_total - gst_amount, 2)
+                gst_amount = sale_grand_total * rate
+                sale_grand_total = sale_grand_total + gst_amount
+            grand_total = round(sale_grand_total + due_subtotal, 2)
+            taxable_amount = round(sale_grand_total - gst_amount, 2)
             gst_breakdown = (
                 GSTRateSummary(
                     rate=round(rate * 100, 2),
-                    taxable_amount=round(grand_total - gst_amount, 2),
+                    taxable_amount=round(sale_grand_total - gst_amount, 2),
                     gst_amount=round(gst_amount, 2),
-                    gross_amount=round(grand_total, 2),
-                    line_count=len(items),
+                    gross_amount=round(sale_grand_total, 2),
+                    line_count=len(sale_items),
                 ),
             )
         else:
@@ -141,9 +202,9 @@ def calculate_billing_totals(
                 if settings_category_map is None:
                     settings_category_map = get_settings().get("gst_category_rate_map", {})
                 computation: GSTComputation = build_gst_computation(
-                    items,
-                    gross_before_discount=total,
-                    gross_after_discount=grand_total,
+                    sale_items,
+                    gross_before_discount=discountable_total,
+                    gross_after_discount=sale_grand_total,
                     gst_rate=gst_rate,
                     gst_type=gst_type,
                     product_wise_gst_enabled=product_wise_gst_enabled,
@@ -152,7 +213,7 @@ def calculate_billing_totals(
                     gst_category_rate_map=settings_category_map,
                 )
                 gst_amount = computation.gst_amount
-                grand_total = computation.grand_total
+                grand_total = round(computation.grand_total + due_subtotal, 2)
                 taxable_amount = computation.taxable_amount
                 gst_mode = computation.gst_mode
                 gst_breakdown = computation.rate_summary
@@ -162,11 +223,12 @@ def calculate_billing_totals(
                 except Exception:
                     rate = 18.0 / 100
                 if gst_type == "inclusive":
-                    gst_amount = grand_total - (grand_total / (1 + rate))
+                    gst_amount = sale_grand_total - (sale_grand_total / (1 + rate))
                 else:
-                    gst_amount = grand_total * rate
-                    grand_total = grand_total + gst_amount
-                taxable_amount = round(grand_total - gst_amount, 2)
+                    gst_amount = sale_grand_total * rate
+                    sale_grand_total = sale_grand_total + gst_amount
+                grand_total = round(sale_grand_total + due_subtotal, 2)
+                taxable_amount = round(sale_grand_total - gst_amount, 2)
 
     return BillingTotals(
         service_subtotal=service_subtotal,
@@ -183,4 +245,5 @@ def calculate_billing_totals(
         gst_mode=gst_mode,
         gst_breakdown=gst_breakdown,
         points_customer_missing=points_customer_missing,
+        discount_cap_triggered=_cap_triggered,
     )

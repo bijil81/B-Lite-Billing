@@ -4,10 +4,12 @@ from tkinter import ttk, messagebox
 from datetime import datetime, timedelta
 
 from utils import C, app_log
+from date_helpers import attach_date_mask
 from ui_theme import ModernButton
-from ui_responsive import get_responsive_metrics, scaled_value, fit_toplevel
+from ui_responsive import get_responsive_metrics, scaled_value, fit_toplevel, make_toplevel_scrollable_with_footer
 from icon_system import get_action_icon
 from db import get_db
+from src.blite_v6.ui.input_behaviors import attach_first_letter_caps, first_letter_caps
 from src.blite_v6.app.window_lifecycle import hide_while_building, reveal_when_ready
 
 
@@ -23,6 +25,29 @@ for hour in range(9, 21):
     TIME_OPTIONS.append(f"{hour:02d}:00")
     TIME_OPTIONS.append(f"{hour:02d}:30")
 TIME_OPTIONS.append("21:00")
+TIME_OPTIONS_DISPLAY = []
+
+
+def _time_display(value):
+    value = str(value or "").strip()
+    try:
+        text = datetime.strptime(value, "%H:%M").strftime("%I:%M %p")
+        return text.lstrip("0")
+    except Exception:
+        return value
+
+
+def _time_to_storage(value):
+    value = str(value or "").strip()
+    for fmt in ("%H:%M", "%I:%M %p", "%I:%M%p"):
+        try:
+            return datetime.strptime(value.upper(), fmt).strftime("%H:%M")
+        except Exception:
+            pass
+    raise ValueError("Time must be in HH:MM or AM/PM format.")
+
+
+TIME_OPTIONS_DISPLAY = [_time_display(value) for value in TIME_OPTIONS]
 
 
 def _color(name, fallback):
@@ -73,9 +98,9 @@ def _ensure_bookings_table():
 
 def _parse_minutes(value):
     try:
-        dt = datetime.strptime(value.strip(), "%H:%M")
+        dt = datetime.strptime(_time_to_storage(value), "%H:%M")
     except Exception as exc:
-        raise ValueError("Time must be in HH:MM format.") from exc
+        raise ValueError("Time must be in HH:MM or AM/PM format.") from exc
     return dt.hour * 60 + dt.minute
 
 
@@ -92,6 +117,30 @@ def _slot_label(total_minutes):
 
 def _now_text():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _nearest_booking_slot(date_value=None):
+    """Return the next sensible 30-minute booking slot in storage HH:MM format."""
+    start_minutes = BookingCalendarFrame.START_HOUR * 60
+    end_minutes = BookingCalendarFrame.END_HOUR * 60
+    try:
+        selected = _to_storage_date(date_value or datetime.now().strftime("%d-%m-%Y"))
+    except Exception:
+        selected = datetime.now().strftime("%Y-%m-%d")
+    if selected != datetime.now().strftime("%Y-%m-%d"):
+        start = start_minutes
+    else:
+        now = datetime.now()
+        current = now.hour * 60 + now.minute
+        start = ((current + 29) // 30) * 30
+        start = max(start, start_minutes)
+        if start >= end_minutes:
+            start = end_minutes - 30
+    end = min(start + 30, end_minutes)
+    return (
+        (datetime(2000, 1, 1) + timedelta(minutes=start)).strftime("%H:%M"),
+        (datetime(2000, 1, 1) + timedelta(minutes=end)).strftime("%H:%M"),
+    )
 
 
 def _friendly_day(date_value):
@@ -202,24 +251,41 @@ def list_staff_names():
 
 def list_customer_suggestions(query="", limit=12):
     query = str(query or "").strip().lower()
+    merged = {}
+    try:
+        from adapters.customer_adapter import get_customers_legacy_map_v5, use_v5_customers_db
+        if use_v5_customers_db():
+            for phone, customer in (get_customers_legacy_map_v5() or {}).items():
+                phone_text = str(phone or customer.get("phone", "") or "").strip()
+                name_text = str((customer or {}).get("name", "")).strip()
+                if phone_text or name_text:
+                    merged[phone_text or name_text.lower()] = {
+                        "phone": phone_text,
+                        "name": name_text or phone_text,
+                    }
+    except Exception:
+        pass
     try:
         from customers import get_customers
         customers = get_customers() or {}
     except Exception:
         customers = {}
-    results = []
     for phone, customer in customers.items():
         phone_text = str(phone or "").strip()
         name_text = str((customer or {}).get("name", "")).strip()
+        if phone_text or name_text:
+            merged.setdefault(phone_text or name_text.lower(), {
+                "phone": phone_text,
+                "name": name_text or phone_text,
+            })
+    results = []
+    for item in merged.values():
+        phone_text = item["phone"]
+        name_text = item["name"]
         hay = f"{name_text} {phone_text}".lower()
         if query and query not in hay:
             continue
-        if not phone_text and not name_text:
-            continue
-        results.append({
-            "phone": phone_text,
-            "name": name_text or phone_text,
-        })
+        results.append(item)
     results.sort(key=lambda item: (item["name"].lower(), item["phone"]))
     return results[:limit]
 
@@ -361,47 +427,73 @@ class BookingModal(tk.Toplevel):
         btn_h = self._responsive["btn_h"]
         action_w = scaled_value(140, 128, 112)
 
-        self.customer_var = tk.StringVar(value=self.booking.get("customer_name", ""))
+        self.customer_var = tk.StringVar(value=first_letter_caps(self.booking.get("customer_name", "")))
         self.phone_var = tk.StringVar(value=self.booking.get("phone", ""))
-        self.service_var = tk.StringVar(value=self.booking.get("service", ""))
+        self.service_var = tk.StringVar(value=first_letter_caps(self.booking.get("service", "")))
         self.staff_var = tk.StringVar(value=self.booking.get("staff", staff_names[0] if staff_names else "General"))
         self.date_var = tk.StringVar(value=_to_display_date(self.booking.get("date", datetime.now().strftime("%Y-%m-%d"))))
-        self.start_var = tk.StringVar(value=self.booking.get("start_time", "09:00"))
-        self.end_var = tk.StringVar(value=self.booking.get("end_time", "09:30"))
+        default_start, default_end = _nearest_booking_slot(self.date_var.get())
+        self.start_var = tk.StringVar(value=_time_display(self.booking.get("start_time", default_start)))
+        self.end_var = tk.StringVar(value=_time_display(self.booking.get("end_time", default_end)))
         self.status_var = tk.StringVar(value=self.booking.get("status", "booked"))
         self.customer_matches = []
+        self._suggest_field = "name"
 
-        outer = tk.Frame(self, bg=_color("bg", "#111827"), padx=18, pady=16)
+        outer = tk.Frame(self, bg=_color("bg", "#111827"), padx=18, pady=12)
         outer.pack(fill=tk.BOTH, expand=True)
 
         title_row = tk.Frame(outer, bg=_color("bg", "#111827"))
         title_row.pack(fill=tk.X, pady=(0, 10))
         tk.Label(title_row, text="Shop Booking", bg=_color("bg", "#111827"), fg=_color("text", "#f8fafc"), font=("Arial", 16, "bold")).pack(side=tk.LEFT)
 
-        form = tk.Frame(outer, bg=_color("card", "#1f2937"), padx=14, pady=14)
-        form.pack(fill=tk.BOTH, expand=True)
+        form, action_row, _canvas, _container = make_toplevel_scrollable_with_footer(
+            outer,
+            bg=_color("bg", "#111827"),
+            footer_bg=_color("bg", "#111827"),
+            padx=0,
+            pady=0,
+            footer_padx=0,
+            footer_pady=8,
+        )
+        form.configure(bg=_color("card", "#1f2937"), padx=14, pady=14)
 
         tk.Label(form, text="Customer Name", bg=_color("card", "#1f2937"), fg=_color("muted", "#94a3b8"), font=("Arial", 10, "bold")).pack(anchor="w", pady=(8, 4))
         self.customer_name_entry = tk.Entry(form, textvariable=self.customer_var, font=("Arial", 11), bg=_color("input", "#111827"), fg=_color("text", "#f8fafc"), insertbackground=_color("accent", "#8b5cf6"), bd=0)
         self.customer_name_entry.pack(fill=tk.X, ipady=6)
+        attach_first_letter_caps(self.customer_name_entry)
+        self._suggest_name_host = tk.Frame(form, bg=_color("card", "#1f2937"))
+        self._suggest_name_host.pack(fill=tk.X, pady=(2, 0))
         tk.Label(form, text="Phone", bg=_color("card", "#1f2937"), fg=_color("muted", "#94a3b8"), font=("Arial", 10, "bold")).pack(anchor="w", pady=(8, 4))
         self.phone_entry = tk.Entry(form, textvariable=self.phone_var, font=("Arial", 11), bg=_color("input", "#111827"), fg=_color("text", "#f8fafc"), insertbackground=_color("accent", "#8b5cf6"), bd=0)
         self.phone_entry.pack(fill=tk.X, ipady=6)
+        self._suggest_phone_host = tk.Frame(form, bg=_color("card", "#1f2937"))
+        self._suggest_phone_host.pack(fill=tk.X, pady=(2, 0))
         self.customer_hint = tk.Label(form, text="Type saved customer name or phone to filter matches.", bg=_color("card", "#1f2937"), fg=_color("muted", "#94a3b8"), font=("Arial", 8))
         self.customer_hint.pack(anchor="w", pady=(4, 3))
-        self.customer_suggestions = tk.Listbox(form, height=4 if not compact else 3, font=("Arial", scaled_value(10, 10, 9)), bg=_color("input", "#111827"), fg=_color("text", "#f8fafc"), highlightthickness=1, highlightbackground=_color("muted", "#334155"), selectbackground=_color("accent", "#8b5cf6"), selectforeground="white", bd=0)
-        self.customer_suggestions.pack(fill=tk.X, pady=(0, 8))
-        self.customer_suggestions.pack_forget()
-        self.customer_name_entry.bind("<KeyRelease>", lambda e: self._refresh_customer_suggestions())
-        self.phone_entry.bind("<KeyRelease>", lambda e: self._refresh_customer_suggestions())
-        self.customer_suggestions.bind("<<ListboxSelect>>", self._apply_customer_suggestion)
-        self.customer_suggestions.bind("<Double-Button-1>", self._apply_customer_suggestion)
-        self._field(form, "Service", tk.Entry(form, textvariable=self.service_var, font=("Arial", 11), bg=_color("input", "#111827"), fg=_color("text", "#f8fafc"), insertbackground=_color("accent", "#8b5cf6"), bd=0))
+        self.customer_suggestions = None
+        self.customer_name_entry.bind("<KeyRelease>", lambda e: self._on_customer_search_key(e, "name"))
+        self.phone_entry.bind("<KeyRelease>", lambda e: self._on_customer_search_key(e, "phone"))
+        self.customer_name_entry.bind("<FocusIn>", lambda e: self._refresh_customer_suggestions("name"))
+        self.phone_entry.bind("<FocusIn>", lambda e: self._refresh_customer_suggestions("phone"))
+        self.customer_name_entry.bind("<Down>", lambda e: self._move_customer_suggestion(1, "name"))
+        self.phone_entry.bind("<Down>", lambda e: self._move_customer_suggestion(1, "phone"))
+        self.customer_name_entry.bind("<Up>", lambda e: self._move_customer_suggestion(-1, "name"))
+        self.phone_entry.bind("<Up>", lambda e: self._move_customer_suggestion(-1, "phone"))
+        self.customer_name_entry.bind("<Return>", lambda e: self._apply_customer_suggestion())
+        self.phone_entry.bind("<Return>", lambda e: self._apply_customer_suggestion())
+        self.customer_name_entry.bind("<Escape>", lambda e: (self._hide_customer_suggestions(), "break")[-1])
+        self.phone_entry.bind("<Escape>", lambda e: (self._hide_customer_suggestions(), "break")[-1])
+        self.customer_name_entry.bind("<FocusOut>", lambda e: self.after(150, self._hide_customer_suggestions_if_safe))
+        self.phone_entry.bind("<FocusOut>", lambda e: self.after(150, self._hide_customer_suggestions_if_safe))
+        service_entry = tk.Entry(form, textvariable=self.service_var, font=("Arial", 11), bg=_color("input", "#111827"), fg=_color("text", "#f8fafc"), insertbackground=_color("accent", "#8b5cf6"), bd=0)
+        attach_first_letter_caps(service_entry)
+        self._field(form, "Service", service_entry)
 
         staff_box = ttk.Combobox(form, textvariable=self.staff_var, values=staff_names, state="readonly", font=("Arial", 11))
         self._field(form, "Staff", staff_box)
         date_row = tk.Frame(form, bg=_color("card", "#1f2937"))
         date_entry = tk.Entry(date_row, textvariable=self.date_var, font=("Arial", 11), bg=_color("input", "#111827"), fg=_color("text", "#f8fafc"), insertbackground=_color("accent", "#8b5cf6"), bd=0)
+        attach_date_mask(date_entry)
         date_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6)
         self.date_pick_button = ModernButton(date_row, text="Pick", command=self._pick_date, color=_color("sidebar", "#334155"), hover_color=_color("muted", "#64748b"), width=scaled_value(78, 70, 62), height=btn_h, radius=8, font=("Arial", scaled_value(9, 9, 8), "bold"))
         self.date_pick_button.pack(side=tk.LEFT, padx=(8, 0))
@@ -409,9 +501,12 @@ class BookingModal(tk.Toplevel):
 
         time_row = tk.Frame(form, bg=_color("card", "#1f2937"))
         tk.Label(time_row, text="Start Time", bg=_color("card", "#1f2937"), fg=_color("muted", "#94a3b8"), font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Combobox(time_row, textvariable=self.start_var, values=TIME_OPTIONS[:-1], state="readonly", width=scaled_value(10, 9, 8), font=("Arial", scaled_value(11, 10, 9))).pack(side=tk.LEFT)
+        self.start_box = ttk.Combobox(time_row, textvariable=self.start_var, values=TIME_OPTIONS_DISPLAY[:-1], state="readonly", width=scaled_value(12, 11, 10), font=("Arial", scaled_value(11, 10, 9)))
+        self.start_box.pack(side=tk.LEFT)
         tk.Label(time_row, text="End Time", bg=_color("card", "#1f2937"), fg=_color("muted", "#94a3b8"), font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=(14, 8))
-        ttk.Combobox(time_row, textvariable=self.end_var, values=TIME_OPTIONS[1:], state="readonly", width=scaled_value(10, 9, 8), font=("Arial", scaled_value(11, 10, 9))).pack(side=tk.LEFT)
+        self.end_box = ttk.Combobox(time_row, textvariable=self.end_var, values=TIME_OPTIONS_DISPLAY[1:], state="readonly", width=scaled_value(12, 11, 10), font=("Arial", scaled_value(11, 10, 9)))
+        self.end_box.pack(side=tk.LEFT)
+        self.start_box.bind("<<ComboboxSelected>>", lambda e: self._sync_end_time())
         self._field(form, "Time Slot", time_row, packed=True)
 
         status_box = ttk.Combobox(form, textvariable=self.status_var, values=list(STATUS_COLORS.keys()), state="readonly", font=("Arial", 11))
@@ -422,16 +517,12 @@ class BookingModal(tk.Toplevel):
         self.notes_text.pack(fill=tk.X)
         self.notes_text.insert("1.0", self.booking.get("notes", ""))
 
-        action_row = tk.Frame(outer, bg=_color("bg", "#111827"))
-        action_row.pack(fill=tk.X, pady=(12, 0))
-
         ModernButton(action_row, text="Save Booking", image=get_action_icon("save"), compound="left", command=self._save, color=_color("green", "#16a34a"), hover_color="#15803d", width=action_w, height=scaled_value(36, 34, 30), radius=10, font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT)
         ModernButton(action_row, text="Convert to Bill", image=get_action_icon("billing"), compound="left", command=self._convert, color=_color("teal", "#0891b2"), hover_color=_color("blue", "#2563eb"), width=action_w, height=scaled_value(36, 34, 30), radius=10, font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT, padx=(8, 0))
         ModernButton(action_row, text="Reminder", image=get_action_icon("whatsapp"), compound="left", command=self._send_reminder, color="#25d366", hover_color="#1a9e4a", width=scaled_value(120, 112, 96), height=scaled_value(36, 34, 30), radius=10, font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT, padx=(8, 0))
         if self.booking.get("id"):
             ModernButton(action_row, text="Delete", image=get_action_icon("clear"), compound="left", command=self._delete, color=_color("red", "#dc2626"), hover_color="#b91c1c", width=scaled_value(110, 102, 88), height=scaled_value(36, 34, 30), radius=10, font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT, padx=(8, 0))
         ModernButton(action_row, text="Close", command=self.destroy, color=_color("sidebar", "#334155"), hover_color=_color("muted", "#64748b"), width=scaled_value(108, 100, 88), height=scaled_value(36, 34, 30), radius=10, font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.RIGHT)
-        self._refresh_customer_suggestions()
         self.update_idletasks()
         fit_toplevel(
             self,
@@ -456,8 +547,8 @@ class BookingModal(tk.Toplevel):
             "service": self.service_var.get().strip(),
             "staff": self.staff_var.get().strip(),
             "date": _to_storage_date(self.date_var.get().strip()),
-            "start_time": self.start_var.get().strip(),
-            "end_time": self.end_var.get().strip(),
+            "start_time": _time_to_storage(self.start_var.get().strip()),
+            "end_time": _time_to_storage(self.end_var.get().strip()),
             "status": self.status_var.get().strip(),
             "notes": self.notes_text.get("1.0", tk.END).strip(),
         }
@@ -465,26 +556,120 @@ class BookingModal(tk.Toplevel):
     def _pick_date(self):
         DatePickerPopup(self, self.date_var, anchor_widget=self.date_pick_button)
 
-    def _refresh_customer_suggestions(self):
-        query = (self.customer_var.get().strip() or self.phone_var.get().strip()).lower()
-        matches = list_customer_suggestions(query)
-        self.customer_matches = matches
-        self.customer_suggestions.delete(0, tk.END)
-        if not matches or (len(matches) == 1 and matches[0]["name"] == self.customer_var.get().strip() and matches[0]["phone"] == self.phone_var.get().strip()):
-            self.customer_suggestions.pack_forget()
+    def _sync_end_time(self):
+        try:
+            start = _parse_minutes(_time_to_storage(self.start_var.get()))
+            end = min(start + 30, BookingCalendarFrame.END_HOUR * 60)
+            self.end_var.set(_time_display((datetime(2000, 1, 1) + timedelta(minutes=end)).strftime("%H:%M")))
+        except Exception:
+            pass
+
+    def _active_customer_suggestion_host(self):
+        return self._suggest_phone_host if self._suggest_field == "phone" else self._suggest_name_host
+
+    def _hide_customer_suggestions(self):
+        for host in (getattr(self, "_suggest_name_host", None), getattr(self, "_suggest_phone_host", None)):
+            if not host:
+                continue
+            for child in host.winfo_children():
+                child.destroy()
+        self.customer_suggestions = None
+        self.customer_matches = []
+
+    def _hide_customer_suggestions_if_safe(self):
+        focused = self.focus_get()
+        if focused in {
+            getattr(self, "customer_name_entry", None),
+            getattr(self, "phone_entry", None),
+            getattr(self, "customer_suggestions", None),
+        }:
             return
+        self._hide_customer_suggestions()
+
+    def _on_customer_search_key(self, event, field):
+        if getattr(event, "keysym", "") in {"Up", "Down", "Return", "Escape", "Tab"}:
+            return
+        self._refresh_customer_suggestions(field)
+
+    def _refresh_customer_suggestions(self, field=None):
+        self._suggest_field = field or self._suggest_field or "name"
+        query = self.phone_var.get().strip() if self._suggest_field == "phone" else self.customer_var.get().strip()
+        query = query.lower()
+        if not query:
+            self._hide_customer_suggestions()
+            return
+        matches = list_customer_suggestions(query, limit=12)
+        self._hide_customer_suggestions()
+        self.customer_matches = matches
+        if not matches or (len(matches) == 1 and matches[0]["name"] == self.customer_var.get().strip() and matches[0]["phone"] == self.phone_var.get().strip()):
+            return
+        host = self._active_customer_suggestion_host()
+        frame = tk.Frame(host, bg=_color("card", "#1f2937"), highlightthickness=1, highlightbackground=_color("teal", "#00b894"))
+        frame.pack(fill=tk.X)
+        scrollbar = ttk.Scrollbar(frame, orient="vertical")
+        self.customer_suggestions = tk.Listbox(
+            frame,
+            height=min(len(matches), 8),
+            font=("Arial", scaled_value(10, 10, 9)),
+            bg=_color("input", "#111827"),
+            fg=_color("text", "#f8fafc"),
+            selectbackground=_color("teal", "#00b894"),
+            selectforeground="white",
+            bd=0,
+            activestyle="none",
+            exportselection=False,
+            yscrollcommand=scrollbar.set,
+        )
+        scrollbar.configure(command=self.customer_suggestions.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.customer_suggestions.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         for item in matches:
-            self.customer_suggestions.insert(tk.END, f"{item['name']}  •  {item['phone']}")
-        self.customer_suggestions.pack(fill=tk.X, pady=(0, 8))
+            self.customer_suggestions.insert(tk.END, f"{item['name']}  |  {item['phone']}")
+        self.customer_suggestions.selection_set(0)
+        self.customer_suggestions.activate(0)
+        self.customer_suggestions.bind("<ButtonRelease-1>", lambda e: self._apply_customer_suggestion())
+        self.customer_suggestions.bind("<Double-Button-1>", lambda e: self._apply_customer_suggestion())
+        self.customer_suggestions.bind("<Return>", lambda e: self._apply_customer_suggestion())
+        self.customer_suggestions.bind("<Escape>", lambda e: (self._hide_customer_suggestions(), "break")[-1])
+        self.customer_suggestions.bind("<Up>", lambda e: self._move_customer_suggestion(-1))
+        self.customer_suggestions.bind("<Down>", lambda e: self._move_customer_suggestion(1))
+        self.customer_suggestions.bind("<FocusOut>", lambda e: self.after(150, self._hide_customer_suggestions_if_safe))
+
+    def _move_customer_suggestion(self, delta, field=None):
+        if field:
+            self._suggest_field = field
+        lb = self.customer_suggestions
+        if lb is None or not lb.winfo_exists() or lb.size() == 0:
+            self._refresh_customer_suggestions(self._suggest_field)
+            lb = self.customer_suggestions
+        if lb is None or not lb.winfo_exists() or lb.size() == 0:
+            return "break"
+        selection = lb.curselection()
+        index = selection[0] if selection else 0
+        index = max(0, min(lb.size() - 1, index + delta))
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(index)
+        lb.activate(index)
+        lb.see(index)
+        return "break"
 
     def _apply_customer_suggestion(self, event=None):
+        if self.customer_suggestions is None:
+            return None
         selection = self.customer_suggestions.curselection()
         if not selection:
-            return
+            return "break"
         item = self.customer_matches[selection[0]]
         self.customer_var.set(item["name"])
         self.phone_var.set(item["phone"])
-        self.customer_suggestions.pack_forget()
+        self._hide_customer_suggestions()
+        try:
+            self.service_var.set(self.service_var.get())
+            self.customer_name_entry.icursor(tk.END)
+            self.phone_entry.icursor(tk.END)
+        except Exception:
+            pass
+        return "break"
 
     def _save(self):
         try:
@@ -633,6 +818,7 @@ class BookingCalendarFrame(tk.Frame):
         actions.pack(side=tk.RIGHT)
         ModernButton(actions, text="Prev", command=lambda: self._shift_day(-1), color=_color("sidebar", "#334155"), hover_color=_color("muted", "#64748b"), width=scaled_value(82, 74, 64), height=scaled_value(34, 32, 28), radius=10, font=("Arial", scaled_value(10, 10, 9), "bold")).pack(side=tk.LEFT)
         self.date_entry = tk.Entry(actions, textvariable=self.selected_date, width=11 if compact else 12, font=("Arial", scaled_value(11, 10, 9), "bold"), bg=_color("input", "#0f172a"), fg=_color("text", "#f8fafc"), insertbackground=_color("accent", "#8b5cf6"), bd=0, justify="center")
+        attach_date_mask(self.date_entry)
         self.date_entry.pack(side=tk.LEFT, padx=8, ipady=7)
         self.header_pick_button = ModernButton(actions, text="Pick", command=lambda: DatePickerPopup(self, self.selected_date, anchor_widget=self.header_pick_button), color=_color("sidebar", "#334155"), hover_color=_color("muted", "#64748b"), width=scaled_value(74, 68, 60), height=scaled_value(34, 32, 28), radius=10, font=("Arial", scaled_value(10, 10, 9), "bold"))
         self.header_pick_button.pack(side=tk.LEFT)
@@ -809,11 +995,12 @@ class BookingCalendarFrame(tk.Frame):
         self.reload()
 
     def _new_booking(self):
+        start_time, end_time = _nearest_booking_slot(self.selected_date.get().strip())
         self._open_modal({
             "date": _to_storage_date(self.selected_date.get().strip()),
             "staff": self.visible_staff_names[0] if self.visible_staff_names else (self.staff_names[0] if self.staff_names else "General"),
-            "start_time": "09:00",
-            "end_time": "09:30",
+            "start_time": start_time,
+            "end_time": end_time,
             "status": "booked",
         })
 
@@ -925,7 +1112,7 @@ class BookingCalendarFrame(tk.Frame):
             tk.Label(top, text=booking["customer_name"], bg=bg, fg=_color("text", "#f8fafc"), font=("Arial", 10, "bold")).pack(side=tk.LEFT)
             tk.Label(top, text=booking["status"].replace("_", " ").title(), bg=STATUS_COLORS.get(booking["status"], _color("sidebar", "#334155")), fg="white", font=("Arial", 8, "bold"), padx=8, pady=2).pack(side=tk.RIGHT)
 
-            tk.Label(frame, text=f"{booking['start_time']} - {booking['end_time']}  |  {booking['staff']}", bg=bg, fg=_color("muted", "#94a3b8"), font=("Arial", 9)).pack(anchor="w", pady=(4, 0))
+            tk.Label(frame, text=f"{_time_display(booking['start_time'])} - {_time_display(booking['end_time'])}  |  {booking['staff']}", bg=bg, fg=_color("muted", "#94a3b8"), font=("Arial", 9)).pack(anchor="w", pady=(4, 0))
             tk.Label(frame, text=f"{booking['service']}  |  {booking['phone']}", bg=bg, fg=_color("muted", "#94a3b8"), font=("Arial", 9)).pack(anchor="w", pady=(2, 0))
 
             frame.bind("<Button-1>", lambda e, booking_id=booking["id"]: self._select_booking(booking_id))
@@ -948,7 +1135,7 @@ class BookingCalendarFrame(tk.Frame):
         self.detail_labels["Service"].configure(text=booking["service"])
         self.detail_labels["Staff"].configure(text=booking["staff"])
         self.detail_labels["Date"].configure(text=_friendly_day(booking["date"]))
-        self.detail_labels["Time"].configure(text=f"{booking['start_time']} - {booking['end_time']}")
+        self.detail_labels["Time"].configure(text=f"{_time_display(booking['start_time'])} - {_time_display(booking['end_time'])}")
         self.detail_labels["Created"].configure(text=str(booking.get("created_at", "--")))
         self.detail_notes.configure(text=booking.get("notes") or "No customer notes for this booking.")
         self.detail_status_chip.configure(text=booking["status"].replace("_", " ").title(), bg=STATUS_COLORS.get(booking["status"], _color("sidebar", "#334155")))
@@ -1023,7 +1210,7 @@ class BookingCalendarFrame(tk.Frame):
             canvas.create_rectangle(x0, y0, x1, y1, fill=fill, outline=outline, width=2 if outline else 0, tags=(tag, "booking"))
             summary_lines = [booking["customer_name"]]
             if slot_span >= 2:
-                summary_lines.append(f"{booking['start_time']} - {booking['end_time']}")
+                summary_lines.append(f"{_time_display(booking['start_time'])} - {_time_display(booking['end_time'])}")
             else:
                 summary_lines.append(booking["service"])
             if slot_span >= 3:
@@ -1146,12 +1333,27 @@ class BookingCalendarFrame(tk.Frame):
                     self.selected_booking_id = int(booking["id"])
                     break
         self.reload()
+        self._notify_booking_changed()
 
     def _delete_booking(self, booking_id):
         delete_booking(booking_id)
         if self.selected_booking_id is not None and int(self.selected_booking_id) == int(booking_id):
             self.selected_booking_id = None
         self.reload()
+        self._notify_booking_changed()
+
+    def _notify_booking_changed(self):
+        try:
+            if hasattr(self.app, "_update_notification_button"):
+                self.app._update_notification_button()
+        except Exception as exc:
+            app_log(f"[BookingCalendarFrame._notify_booking_changed notifications] {exc}")
+        try:
+            dashboard = getattr(self.app, "dashboard_frame", None)
+            if dashboard and hasattr(dashboard, "refresh"):
+                dashboard.refresh()
+        except Exception as exc:
+            app_log(f"[BookingCalendarFrame._notify_booking_changed dashboard] {exc}")
 
     def _convert_to_bill(self, booking):
         try:

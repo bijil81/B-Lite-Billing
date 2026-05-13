@@ -1,21 +1,25 @@
 # Next Update QA Blueprint
 
-Last updated: 2026-04-29
+Last updated: 2026-05-10 14:28 +05:30
 Scope: Production QA findings handoff for the next refactor/update branch
 
 ## Current Release Position
 
-V6 source tests are currently green after the split/runtime-dependency/QA-fix port, but the build is not yet a release candidate.
+V6 source tests are currently green after the split/runtime-dependency/QA-fix port and the 2026-05-10 licensing/key-custody cleanup. The project is a production-ready release candidate for latest-source EXE rebuild and controlled manual release testing.
 
-Release blockers before a V6 EXE handoff:
-- Manual live app smoke from `main.py`.
+Release verification gates before customer handoff:
 - Existing customer DB migration dry-run on a staging copy.
+- Latest-source EXE rebuild.
 - Real `dist/` artifact inspection after build.
-- Licensing activation path must be finalized because the client has moved to verify-only licensing.
+- Source-mode and rebuilt-EXE activation smoke using the secure private key.
+- Real-printer smoke if the target shop uses direct thermal printing.
 
-Do not ship V6 with the verify-only licensing client until either:
-- Phase L1 creates and tests the external V6 admin signer/token generator, or
-- the licensing crypto cutover is explicitly deferred and the previous V5.6-compatible licensing path is restored for this release.
+Licensing update:
+- Phase L1 source/key ceremony is complete.
+- Current public fingerprint: `84D2E830E37775067190D400`.
+- Matching private key is stored outside the project at `G:\chimmu\Bobys_Salon Billing\License_Admin_Secrets\v6_license_private_key.json`.
+- Temporary project-root `admin_keys` folder was removed after secure copy.
+- Do not ship until the rebuilt EXE activates with a BLV2 token from this private key.
 
 ## Fixes Already Applied
 
@@ -81,7 +85,7 @@ Primary file:
   - `pytest.ini`
   - `.github/workflows/qa-critical.yml`
 - Latest verification:
-  - `python -m pytest -q` -> 86 passed
+  - `python -m pytest -q` -> 467 passed on 2026-05-10
   - `python -m pytest -m critical -q` -> 9 passed
 
 ## Deferred Findings For Next Update
@@ -112,8 +116,8 @@ Verification so far:
 Important release note:
 
 - The existing DB migration helper is intentionally not auto-run at startup. A staging dry-run and backup/apply command must be executed manually before enabling it in any production workflow.
-- The licensing change requires a production key ceremony and admin/keygen tooling outside the client package before live license issuance. The V6 client now has verify-only behavior, but real production public key values must be finalized before release.
-- Current V6 activation with old V5 HMAC keys is intentionally not release-ready after this change. Next licensing task is to create the external V6 admin signer/token generator or temporarily defer the licensing crypto cutover.
+- The licensing change now has a finalized 2048-bit public/private key pair for the next release build. Old V5 HMAC keys remain intentionally rejected.
+- Next licensing tasks are rebuilt-EXE activation smoke and real `dist/` artifact inspection.
 
 ## Next Phase Definition
 
@@ -170,8 +174,10 @@ Phase L1 implementation status:
 - Done: V6 client verifies tokens with public-key material only; old V5.6 HMAC keys remain rejected.
 - Done: `WhiteLabelApp.spec` excludes `licensing_admin`; focused packaging hygiene test updated.
 - Done: user-facing admin note added at `HOW_TO_ACTIVATE_LICENSE_V6.md`.
-- Pending release gate: first real production key ceremony, EXE rebuild, dist artifact inspection, and manual source/EXE activation smoke.
-- Test note: focused py_compile/direct licensing tests passed in current environment; full pytest is pending because pytest is not installed in the bundled runtime.
+- Done: production 2048-bit key ceremony; current public fingerprint `84D2E830E37775067190D400`.
+- Done: matching private key copied to `G:\chimmu\Bobys_Salon Billing\License_Admin_Secrets\v6_license_private_key.json`; temporary project-root `admin_keys` removed.
+- Pending release gate: EXE rebuild, dist artifact inspection, and manual source/EXE activation smoke.
+- Test note: `python -m pytest -q` passed with `467 passed` on 2026-05-10.
 
 Release gate after Phase L1:
 - Manual license smoke:
@@ -321,7 +327,7 @@ Suggested files:
 - tests under `tests/test_transactions_and_security.py` or new `tests/test_licensing_security.py`
 
 Acceptance criteria:
-- Status: Client-side verify-only model implemented in V6; production key ceremony/admin signer still pending.
+- Status: Client-side verify-only model, admin signer, and production key ceremony are complete for source; rebuilt-EXE activation smoke is pending.
 - No production client file contains signing/private secrets.
 - Client can verify valid signed licenses offline.
 - Client cannot generate licenses.
@@ -398,14 +404,14 @@ Goal: implement the next production-hardening update without destabilizing the c
 
 Context:
 - Code-only QA fixes are already applied for redeem phone enforcement, customer phone validation, invoice accounting invariants, redeem_discount persistence, and billing discount base ordering.
-- Current tests pass: `python -m pytest -q` -> 86 passed, `python -m pytest -m critical -q` -> 9 passed.
+- Current tests pass: `python -m pytest -q` -> 467 passed on 2026-05-10.
 - Do not undo existing user/Codex/Cursor changes.
 - Billing.py is planned for a later split/refactor; keep edits minimal unless the current branch is explicitly the split/refactor branch.
 
 Must do in this next update:
 1. Implement controlled migration/dry-run for existing SQLite DBs so CHECK constraints added in schema are applied safely to already-created v5 tables. [V6 implemented; staging run pending]
 2. Add constraints and migration coverage for `v5_product_variants` fields: sale_price, cost_price, stock_qty, reorder_level. [V6 implemented]
-3. Replace licensing HMAC-secret client model with asymmetric verify-only client model. Keep private signing key only in admin tooling, not in production client modules or PyInstaller bundle. [V6 client + Phase L1 admin signer implemented; production key ceremony/manual smoke pending]
+3. Replace licensing HMAC-secret client model with asymmetric verify-only client model. Keep private signing key only in admin tooling, not in production client modules or PyInstaller bundle. [V6 client + Phase L1 admin signer + production key ceremony complete; rebuilt-EXE activation smoke pending]
 4. Verify packaging: `WhiteLabelApp.spec` and build output must not ship `licensing_admin`, private keys, tests, pytest, or dev artifacts. [Spec tests added; real dist inspection pending]
 5. Replace Google Drive pickle token persistence with JSON credential serialization and add safe migration from old pickle token if possible. [V6 implemented]
 6. Add/adjust tests for migration safety, licensing verify-only behavior, variant constraints, and token serialization. [Focused tests added]

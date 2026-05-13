@@ -24,6 +24,7 @@ class MembershipsRepository:
 
     def get_customer_membership(self, customer_phone: str) -> dict | None:
         ensure_v5_schema()
+        customer_phone = str(customer_phone or "").strip()
         with connection_scope() as conn:
             row = conn.execute(
                 "SELECT * FROM v5_customer_memberships WHERE customer_phone = ?",
@@ -62,10 +63,11 @@ class MembershipsRepository:
 
     def upsert_customer_membership(self, payload: dict) -> None:
         ensure_v5_schema()
+        customer_phone = str(payload.get("customer_phone") or "").strip()
         with connection_scope() as conn:
             existing = conn.execute(
                 "SELECT id FROM v5_customer_memberships WHERE customer_phone = ?",
-                (payload.get("customer_phone"),),
+                (customer_phone,),
             ).fetchone()
             if existing:
                 conn.execute(
@@ -86,7 +88,7 @@ class MembershipsRepository:
                         payload.get("status", "Active"),
                         float(payload.get("price_paid", 0.0) or 0.0),
                         payload.get("payment_method", ""),
-                        payload.get("customer_phone"),
+                        customer_phone,
                     ),
                 )
             else:
@@ -99,7 +101,7 @@ class MembershipsRepository:
                     ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        payload.get("customer_phone"),
+                        customer_phone,
                         payload.get("customer_name", ""),
                         payload.get("plan_name", ""),
                         float(payload.get("discount_pct", 0.0) or 0.0),
@@ -138,9 +140,9 @@ class MembershipsRepository:
     def delete_plan(self, plan_name: str) -> None:
         ensure_v5_schema()
         with connection_scope() as conn:
-            conn.execute("DELETE FROM v5_membership_plans WHERE plan_name = ?", (plan_name,))
+            conn.execute("UPDATE v5_membership_plans SET active = 0, updated_at = datetime('now') WHERE plan_name = ?", (plan_name,))
 
     def delete_customer_membership(self, customer_phone: str) -> None:
         ensure_v5_schema()
         with connection_scope() as conn:
-            conn.execute("DELETE FROM v5_customer_memberships WHERE customer_phone = ?", (customer_phone,))
+            conn.execute("UPDATE v5_customer_memberships SET status = 'Cancelled', updated_at = datetime('now') WHERE customer_phone = ?", (customer_phone,))

@@ -11,7 +11,6 @@ from customers import (
     redeem_points,
     save_customers,
 )
-from services_v5.customer_service import CustomerService
 from src.blite_v6.billing.customer_context import (
     build_v5_customer_payload,
     normalize_customer_identity,
@@ -19,9 +18,7 @@ from src.blite_v6.billing.customer_context import (
 )
 from ui_theme import _contrast_text
 from utils import C
-
-
-_customer_service = CustomerService()
+from adapters.customer_adapter import _service as _customer_service
 
 
 def billing_entry_fg(preferred: str | None = None) -> str:

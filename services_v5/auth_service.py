@@ -17,3 +17,6 @@ class AuthService:
 
     def save_user(self, payload: dict) -> None:
         self.repo.upsert(payload)
+
+    def delete_user(self, username: str) -> None:
+        self.repo.delete(username)

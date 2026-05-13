@@ -66,6 +66,31 @@ F_LOG         = os.path.join(DATA_DIR, "app_debug.log")
 _INVOICE_LOCK = threading.Lock()
 
 
+def _max_v5_invoice_sequence(ym: str) -> int:
+    """Return the highest DB invoice sequence for the month, if v5 invoices exist."""
+    try:
+        import sqlite3
+        from db import DB_PATH
+
+        if not os.path.exists(DB_PATH):
+            return 0
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT invoice_no FROM v5_invoices WHERE invoice_no LIKE ?",
+                (f"INV-{ym}-%",),
+            ).fetchall()
+        max_seq = 0
+        for (invoice_no,) in rows:
+            try:
+                seq = int(str(invoice_no).rsplit("-", 1)[-1])
+                max_seq = max(max_seq, seq)
+            except Exception:
+                continue
+        return max_seq
+    except Exception:
+        return 0
+
+
 # ─────────────────────────────────────────────────────────
 #  CENTRALIZED LOGGING  (Fix R6a)
 # ─────────────────────────────────────────────────────────
@@ -89,8 +114,8 @@ def _setup_logger() -> logging.Logger:
         ))
         logger.setLevel(logging.DEBUG)
         logger.addHandler(handler)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[utils._setup_logger] Error: {e}")
     return logger
 
 _logger = _setup_logger()
@@ -106,8 +131,8 @@ def app_log(msg: str, level: str = "error") -> None:
     try:
         fn = getattr(_logger, level.lower(), _logger.error)
         fn(msg)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[app_log error] {e} - Original message: {msg}")
 
 
 C = {
@@ -143,82 +168,57 @@ def _normalize_json_payload(path: str, data, default):
                 "warning",
             )
             return default
-    except Exception:
-        pass
+    except Exception as e:
+        app_log(f"[_normalize_json_payload] Error: {e}")
     return data
 
 
 def load_json(path: str, default=None):
     """
-    Fix M2a: SQLite primary, JSON fallback — transparent dual-mode.
-    1. Try db.db_load() → reads from SQLite kv_store (fast)
-    2. If db unavailable, read JSON file directly (original behaviour)
-    3. Log + auto-backup corrupt JSON files (Fix R6b preserved)
+    Pure SQLite load (M2a Fix).
+    Legacy JSON fallbacks have been removed to prevent Ghosting.
     """
     if default is None:
         default = {}
-    # ── SQLite primary (M2a) ──────────────────────────────
+    try:
+        from adapters.sqlite_legacy_bridge import load_special_json_v5
+        handled, value = load_special_json_v5(path, default)
+        if handled:
+            return _normalize_json_payload(path, value, default)
+    except Exception as e:
+        app_log(f"[load_json] sqlite_legacy_bridge load error for {path}: {e}")
     try:
         from db import db_load
         return _normalize_json_payload(path, db_load(path, default), default)
     except ImportError:
-        pass   # db.py not available — fall through to JSON
+        pass   # db.py not available
     except Exception as e:
         app_log(f"[load_json] db_load error for {path}: {e}")
-    # ── JSON fallback (original R6b behaviour) ────────────
-    try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return _normalize_json_payload(path, json.load(f), default)
-    except json.JSONDecodeError as e:
-        app_log(f"[load_json] Corrupt JSON at {path}: {e}")
-        try:
-            backup = path + ".corrupt"
-            shutil.copy2(path, backup)
-            app_log(f"[load_json] Corrupt file backed up to {backup}")
-        except Exception:
-            pass
-    except Exception as e:
-        app_log(f"[load_json] Error reading {path}: {e}")
+    
     return default
 
 
 def save_json(path: str, data) -> bool:
     """
-    Fix M2b: SQLite primary + JSON backup — transparent dual-mode.
-    1. Try db.db_save() → writes SQLite kv_store + JSON backup atomically
-    2. If db unavailable, write JSON file directly (original behaviour)
-    Fix R6c: logs save failures with path details (preserved).
+    Pure SQLite save (M2b Fix).
+    Legacy JSON fallbacks have been removed to prevent Ghosting.
     """
-    # ── SQLite primary (M2b) ──────────────────────────────
+    try:
+        from adapters.sqlite_legacy_bridge import save_special_json_v5
+        handled, ok = save_special_json_v5(path, data)
+        if handled:
+            return bool(ok)
+    except Exception as e:
+        app_log(f"[save_json] sqlite_legacy_bridge save error for {path}: {e}")
     try:
         from db import db_save
         return db_save(path, data)
     except ImportError:
-        pass   # db.py not available — fall through to JSON
+        pass   # db.py not available
     except Exception as e:
         app_log(f"[save_json] db_save error for {path}: {e}")
-    # ── JSON fallback (original R6c behaviour) ────────────
-    try:
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        if os.path.exists(path):
-            os.replace(tmp, path)
-        else:
-            os.rename(tmp, path)
-        return True
-    except Exception as e:
-        app_log(f"[save_json] Failed to save {path}: {e}")
-        try:
-            if os.path.exists(path + ".tmp"):
-                os.remove(path + ".tmp")
-        except Exception:
-            pass
-        return False
+    
+    return False
 
 
 def safe_float(v, default=0.0):
@@ -255,8 +255,8 @@ def popup_window(win, w: int, h: int, title: str = "",
         owner = win.master.winfo_toplevel() if getattr(win, "master", None) else None
         if owner and owner != win:
             win.transient(owner)
-    except Exception:
-        pass
+    except Exception as e:
+        app_log(f"[popup_window] transient call failed: {e}")
     try:
         from ui_responsive import fit_toplevel
         fit_toplevel(win, w, h,
@@ -265,8 +265,8 @@ def popup_window(win, w: int, h: int, title: str = "",
         if title:
             win.title(title)
         return
-    except Exception:
-        pass
+    except Exception as e:
+        app_log(f"[popup_window] fit_toplevel failed: {e}")
     """
     Smart popup: scales to screen, centers, sets sensible min size.
     Always fits within screen — no more tiny fixed-size popups.
@@ -322,9 +322,11 @@ def next_invoice() -> str:
             ym      = now.strftime("%Y%m")
             data    = load_json(F_INVOICE, {"last": 0, "month": ""})
             last_mo = data.get("month", "")
-            num     = int(data.get("last", 0)) + 1
+            last_num = int(data.get("last", 0)) if last_mo == ym else 0
+            db_num = _max_v5_invoice_sequence(ym)
+            num = max(last_num, db_num) + 1
             if last_mo != ym:
-                num = 1
+                num = max(db_num, 0) + 1
             save_json(F_INVOICE, {"last": num, "month": ym})
             return f"INV-{ym}-{num:05d}"
     except Exception as e:
@@ -333,17 +335,50 @@ def next_invoice() -> str:
 
 
 def init_services_db():
-    """Copy bundled services_db.json on first run."""
-    if not os.path.exists(F_SERVICES):
-        for src in [resource_path("services_db.json"),
-                    os.path.join(os.path.dirname(
-                        os.path.abspath(__file__)), "services_db.json")]:
-            if os.path.exists(src):
-                try:
-                    shutil.copy(src, F_SERVICES)
-                except Exception as e:
-                    app_log(f"[init_services_db] {e}")
-                break
+    """Seed relational service master and optional product inventory on first run."""
+    try:
+        from services_v5.inventory_service import InventoryService
+        from services_v5.service_master_service import ServiceMasterService
+
+        service_master = ServiceMasterService()
+        inventory_service = InventoryService()
+
+        if service_master.has_services() or inventory_service.list_items():
+            return
+
+        for src in [
+            resource_path("services_db.json"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "services_db.json"),
+        ]:
+            if not os.path.exists(src):
+                continue
+            with open(src, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            if isinstance(payload, dict) and payload:
+                service_master.import_legacy_payload(payload, deactivate_missing=False)
+                products_blob = payload.get("Products", {}) if isinstance(payload, dict) else {}
+                if isinstance(products_blob, dict) and products_blob:
+                    inventory_service.sync_legacy_inventory_map({
+                        str(item_name or "").strip(): {
+                            "category": str(category or "").strip() or "General",
+                            "qty": 0.0,
+                            "unit": "pcs",
+                            "min_stock": 5.0,
+                            "min_qty": 5.0,
+                            "cost": float(price or 0.0),
+                            "price": float(price or 0.0),
+                            "inactive": False,
+                            "bill_label": str(item_name or "").strip(),
+                            "base_product": str(item_name or "").strip(),
+                        }
+                        for category, items in products_blob.items()
+                        if isinstance(items, dict)
+                        for item_name, price in items.items()
+                        if str(item_name or "").strip()
+                    })
+                return
+    except Exception as e:
+        app_log(f"[init_services_db] {e}")
 
 
 def fmt_currency(v) -> str:
@@ -438,30 +473,25 @@ def attendance_open_session(day_rec: dict):
 
 def init_sample_data():
     """Initialize sample/default data on first run."""
-    import json as _json
     from datetime import date, timedelta
+    services_snapshot = {}
+    try:
+        from services_v5.inventory_service import InventoryService
+        from services_v5.service_master_service import ServiceMasterService
 
-    if not os.path.exists(F_SERVICES):
-        for src_path in [
-            resource_path("services_db.json"),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "services_db.json"),
-        ]:
-            if os.path.exists(src_path):
-                try:
-                    shutil.copy2(src_path, F_SERVICES)
-                except Exception as e:
-                    app_log(f"[init_sample_data services copy] {e}")
-                break
+        init_services_db()
+        services_snapshot = {
+            "Services": ServiceMasterService().list_grouped_services(active_only=True),
+            "Products": InventoryService().build_legacy_inventory_map(active_only=True),
+        }
+    except Exception as e:
+        app_log(f"[init_sample_data] service snapshot build failed: {e}")
+        services_snapshot = load_json(F_SERVICES, {})
 
-    if not os.path.exists(F_INVENTORY):
+    if not load_json(F_INVENTORY, {}):
         try:
-            db_path = F_SERVICES if os.path.exists(F_SERVICES) else \
-                os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "services_db.json")
-            if os.path.exists(db_path):
-                with open(db_path, "r", encoding="utf-8") as f:
-                    db = _json.load(f)
+            db = services_snapshot if isinstance(services_snapshot, dict) else {}
+            if db:
                 inventory = {}
                 for cat, items in db.get("Products", {}).items():
                     for iname, price in items.items():
@@ -477,10 +507,10 @@ def init_sample_data():
                         }
                 if inventory:
                     save_json(F_INVENTORY, inventory)
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[init_sample_data] F_INVENTORY init failed: {e}")
 
-    if not os.path.exists(F_OFFERS):
+    if not load_json(F_OFFERS, []):
         today = date.today()
         yr    = date(today.year, 12, 31).strftime("%Y-%m-%d")
         td    = today.strftime("%Y-%m-%d")
@@ -501,7 +531,7 @@ def init_sample_data():
         ])
 
     F_PKG = os.path.join(DATA_DIR, "pkg_templates.json")
-    if not os.path.exists(F_PKG):
+    if not load_json(F_PKG, []):
         save_json(F_PKG, [
             {"name": "Silver Package (1 Month)",    "price": 1500,
              "duration_days": 30,  "discount_pct": 10, "wallet": 0,
@@ -523,7 +553,7 @@ def init_sample_data():
              "description": "30% off + Rs.1000 wallet - full year VIP"},
         ])
 
-    if not os.path.exists(F_REDEEM):
+    if not load_json(F_REDEEM, {}):
         today = date.today()
         exp1y = (today + timedelta(days=365)).strftime("%Y-%m-%d")
         nowt  = today.strftime("%Y-%m-%d %H:%M")
@@ -622,8 +652,8 @@ def apply_ttk_style(ui_scale: float = 1.0):
             _root = _tk._default_root
             if _root is not None:
                 _apply_combobox_option_add(_root)
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[apply_ttk_style] _apply_combobox_option_add failed: {e}")
 
     except Exception as e:
         app_log(f"[apply_ttk_style] {e}")
@@ -673,16 +703,18 @@ _CODE_BUILT      = False
 
 
 def build_item_codes(force=False):
-    """Build code→item mapping from services_db.json. Cached after first call."""
+    """Build code→item mapping from relational service and inventory masters."""
     global _ITEM_CODE_CACHE, _CODE_BUILT
     if _CODE_BUILT and not force:
         return _ITEM_CODE_CACHE
 
     _ITEM_CODE_CACHE.clear()
     try:
-        db = load_json(F_SERVICES, {})
+        from services_v5.inventory_service import InventoryService
+        from services_v5.service_master_service import ServiceMasterService
 
-        for cat, items in db.get("Services", {}).items():
+        services = ServiceMasterService().list_grouped_services(active_only=True)
+        for cat, items in services.items():
             prefix = _SVC_PREFIXES.get(cat, cat[:2].upper())
             for i, (name, price) in enumerate(items.items(), 1):
                 code = f"{prefix}{i:03d}"
@@ -694,7 +726,13 @@ def build_item_codes(force=False):
                     "type":     "service",
                 }
 
-        for cat, items in db.get("Products", {}).items():
+        grouped_products = {}
+        for name, item in InventoryService().build_legacy_inventory_map().items():
+            category = str(item.get("category", "")).strip() or "General"
+            grouped_products.setdefault(category, {})[name] = float(
+                item.get("price", item.get("sale_price", item.get("cost", 0.0))) or 0.0
+            )
+        for cat, items in grouped_products.items():
             prefix = _PRD_PREFIXES.get(cat, "P" + cat[:2].upper())
             for i, (name, price) in enumerate(items.items(), 1):
                 code = f"{prefix}{i:03d}"
@@ -765,7 +803,7 @@ def open_file_cross_platform(path: str):
 
 
 def open_print_text_fallback(text: str, filename: str = "bill_print_preview.txt") -> str:
-    """Create a printable text fallback and ask the OS default print handler to print it."""
+    """Create a text fallback file and open it for manual review/printing."""
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", filename).strip("._")
     if not safe_name:
         safe_name = "bill_print_preview.txt"
@@ -774,12 +812,6 @@ def open_print_text_fallback(text: str, filename: str = "bill_print_preview.txt"
     path = os.path.join(DATA_DIR, safe_name)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text or "")
-    try:
-        if sys.platform == "win32":
-            os.startfile(path, "print")  # type: ignore[attr-defined]
-            return path
-    except Exception as e:
-        app_log(f"[open_print_text_fallback] shell print failed: {e}", "warning")
     open_file_cross_platform(path)
     return path
 

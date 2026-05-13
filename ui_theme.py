@@ -136,8 +136,9 @@ def ensure_segoe_ttk_font():
         style.configure("TCheckbutton", font=base_font)
         style.configure("TRadiobutton", font=base_font)
         style.configure("TButton", font=base_font)
-    except Exception:
-        pass
+    except Exception as e:
+        from utils import app_log
+        app_log(f"[ensure_segoe_ttk_font] Error: {e}")
 
 
 # —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
@@ -438,8 +439,9 @@ def apply_combobox_style(root_or_widget,
             "*TCombobox*Listbox.selectForeground", "white")
         root_or_widget.option_add(
             "*TCombobox*Listbox.font",             cb_list_font)
-    except Exception:
-        pass
+    except Exception as e:
+        from utils import app_log
+        app_log(f"[apply_combobox_style] Listbox config failed: {e}")
 
     return style_name
 
@@ -1351,8 +1353,9 @@ class AnimationEngine:
         if self._after_id and self._root is not None:
             try:
                 self._root.after_cancel(self._after_id)
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.init] after_cancel failed: {e}")
         self._root = root
         self._tick()
 
@@ -1361,8 +1364,9 @@ class AnimationEngine:
         if self._after_id and self._root is not None:
             try:
                 self._root.after_cancel(self._after_id)
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.stop] after_cancel failed: {e}")
         self._after_id = None
         self._root = None
 
@@ -1384,8 +1388,9 @@ class AnimationEngine:
                     t["fn"](1.0)
                     if t.get("done"):
                         t["done"]()
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine._tick] task failed: {e}")
         self._tasks = alive
         if self._root:
             try:
@@ -1414,8 +1419,9 @@ class AnimationEngine:
         def fn(t):
             try:
                 widget.configure(**{prop: _lerp_color(from_hex, to_hex, t)})
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.color] config failed: {e}")
         self._add(fn, dur)
 
     def width(self, widget, from_w: int, to_w: int,
@@ -1424,8 +1430,9 @@ class AnimationEngine:
         def fn(t):
             try:
                 widget.configure(width=int(from_w + (to_w - from_w) * t))
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.width] config failed: {e}")
         self._add(fn, dur, done=done)
 
     def count_up(self, label, from_v: float, to_v: float,
@@ -1437,8 +1444,9 @@ class AnimationEngine:
             v = from_v + (to_v - from_v) * t
             try:
                 label.configure(text=f"{prefix}{fmt.format(v)}{suffix}")
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.count_up] config failed: {e}")
         self._add(fn, dur, ease=_ease_out)
 
     def pulse(self, widget, color_on: str, color_off: str,
@@ -1456,8 +1464,9 @@ class AnimationEngine:
                 if t >= 1.0:
                     try:
                         widget.configure(bg=color_off)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        from utils import app_log
+                        app_log(f"[AnimationEngine.pulse] off config failed: {e}")
                     if self._root:
                         self._root.after(60, lambda: _do(n-1))
             self._add(_back, dur)
@@ -1486,14 +1495,16 @@ class AnimationEngine:
             except Exception:
                 try:
                     widget.place(x=x0 + offset, y=y0)
-                except Exception:
-                    pass
+                except Exception as e:
+                    from utils import app_log
+                    app_log(f"[AnimationEngine.shake] place failed: {e}")
         def restore():
             try:
                 widget.place_forget()
                 widget.pack()
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.shake] restore failed: {e}")
         self._add(fn, dur, ease=lambda t: t, done=restore)
 
     def smooth_drag(self, divider, panel,
@@ -1522,20 +1533,23 @@ class AnimationEngine:
                     return
                 last_w[0] = new_w
                 panel.configure(width=new_w)
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.smooth_drag] config failed: {e}")
 
         def _enter(e):
             try:
                 divider.configure(bg=C.get("teal", "#0ea5e9"))
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.smooth_drag] enter config failed: {e}")
 
         def _leave(e):
             try:
                 divider.configure(bg=C.get("sidebar", "#1e293b"))
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.smooth_drag] leave config failed: {e}")
 
         divider.bind("<B1-Motion>", _drag)
         divider.bind("<Enter>",     _enter)

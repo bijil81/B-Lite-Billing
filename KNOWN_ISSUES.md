@@ -1,6 +1,6 @@
 # Known Issues Register (Phase-2)
 
-Last updated: 2026-04-29
+Last updated: 2026-05-10 14:28 +05:30
 Owner: QA / Engineering
 
 ## Critical
@@ -32,8 +32,8 @@ Owner: QA / Engineering
 - **ISSUE-011: Client-side licensing HMAC/keygen material**
   - Area: `licensing/crypto.py`, `licensing/license_manager.py`, `licensing/storage.py`, `WhiteLabelApp.spec`
   - Risk: License key forgery if client secrets are extracted
-  - Status: Partially closed in V6 client; production public key ceremony/admin signer still pending
-  - Action: Replaced client HMAC key validation with verify-only signed-token validation and added packaging exclusion tests
+  - Status: Closed for V6.1.0 source; rebuilt-EXE activation smoke remains a release verification item
+  - Action: Replaced client HMAC key validation with verify-only signed-token validation, finalized 2048-bit RSA public key fingerprint `84D2E830E37775067190D400`, secured the matching private key outside the project folder, and added packaging exclusion tests
 
 ## High
 
@@ -70,13 +70,13 @@ Owner: QA / Engineering
 - **ISSUE-014: V6 licensing admin signer not yet created**
   - Area: `licensing_admin`, `licensing/crypto.py`
   - Risk: V6 verify-only client cannot activate production licenses until an external signer issues V6 signed tokens
-  - Status: Tooling closed in Phase L1; production key ceremony, dist inspection, and manual activation smoke remain release gates
-  - Action: Added admin-only BLV2 token generator, public-key module, packaging hygiene checks, and `HOW_TO_ACTIVATE_LICENSE_V6.md`
+  - Status: Closed for source/key ceremony; rebuilt-EXE activation smoke and dist inspection remain release gates
+  - Action: Added admin-only BLV2 token generator, public-key module, packaging hygiene checks, `HOW_TO_ACTIVATE_LICENSE_V6.md`, and production key custody at `G:\chimmu\Bobys_Salon Billing\License_Admin_Secrets\v6_license_private_key.json`
 
 ## Regression Tracking
 
 - Current QA suite has no expected-failure tests for the Phase-2 critical validator/database items.
-- Remaining high-risk work is tracked as phased follow-up: real staging DB migration dry-run/apply, production licensing key ceremony, and real dist artifact inspection.
+- Remaining high-risk work is tracked as phased follow-up: real staging DB migration dry-run/apply, rebuilt-EXE licensing activation smoke, and real dist artifact inspection.
 # Known Issues -- B-Lite Management v5.6
 
 **Version:** 5.6.0

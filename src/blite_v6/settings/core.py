@@ -80,6 +80,7 @@ DEFAULTS = {
     "feature_mobile_viewer":  False,
     "feature_whatsapp_api":   False,
     "feature_multibranch":    False,
+    "sidebar_module_visibility": {},
     "licensing_enforcement_enabled": False,
     "ai_config": {
         "enabled": True,

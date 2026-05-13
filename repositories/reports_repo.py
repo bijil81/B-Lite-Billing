@@ -6,10 +6,19 @@ from db_core.connection import connection_scope
 from db_core.query_utils import rows_to_dicts
 from db_core.schema_manager import ensure_v5_schema
 
+def _date_start(value: str) -> str:
+    raw = str(value or "").strip()
+    return f"{raw} 00:00:00" if len(raw) == 10 else raw
+
+def _date_end(value: str) -> str:
+    raw = str(value or "").strip()
+    return f"{raw} 23:59:59" if len(raw) == 10 else raw
 
 class ReportsRepository:
     def sales_summary(self, from_date: str, to_date: str) -> dict:
         ensure_v5_schema()
+        from_date = _date_start(from_date)
+        to_date = _date_end(to_date)
         with connection_scope() as conn:
             row = conn.execute(
                 """
@@ -41,6 +50,8 @@ class ReportsRepository:
 
     def payment_breakdown(self, from_date: str, to_date: str) -> list[dict]:
         ensure_v5_schema()
+        from_date = _date_start(from_date)
+        to_date = _date_end(to_date)
         with connection_scope() as conn:
             rows = conn.execute(
                 """
@@ -58,6 +69,8 @@ class ReportsRepository:
 
     def top_services(self, from_date: str, to_date: str) -> list[dict]:
         ensure_v5_schema()
+        from_date = _date_start(from_date)
+        to_date = _date_end(to_date)
         with connection_scope() as conn:
             rows = conn.execute(
                 """
@@ -75,6 +88,8 @@ class ReportsRepository:
 
     def report_rows(self, from_date: str = "", to_date: str = "", search: str = "") -> list[dict]:
         ensure_v5_schema()
+        from_date = _date_start(from_date)
+        to_date = _date_end(to_date)
         search_like = f"%{search.lower()}%" if search else ""
         with connection_scope() as conn:
             query = """
@@ -88,7 +103,10 @@ class ReportsRepository:
                                  FROM v5_payments p
                                  WHERE p.invoice_id = i.id
                                  ORDER BY p.id LIMIT 1), '') AS payment,
-                       i.net_total AS total,
+                       COALESCE((SELECT SUM(ii.line_total) FROM v5_invoice_items ii WHERE ii.invoice_id = i.id AND ii.item_name = 'Previous Due Clearance'), 0) AS clearance_amount,
+                       COALESCE((SELECT SUM(amount) FROM v5_payments p WHERE p.invoice_id = i.id), i.net_total) AS paid_amount,
+                       (i.net_total - COALESCE((SELECT SUM(ii.line_total) FROM v5_invoice_items ii WHERE ii.invoice_id = i.id AND ii.item_name = 'Previous Due Clearance'), 0)) AS total,
+                       i.net_total AS gross_invoice_total,
                        i.discount_total AS discount,
                        i.tax_total AS gst_amount,
                        MAX(0, i.net_total - i.tax_total) AS taxable_amount,

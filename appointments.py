@@ -31,12 +31,13 @@ from date_helpers import (
     today_display_str,
     validate_display_date,
 )
-from ui_responsive import make_scrollable
+from ui_responsive import make_toplevel_scrollable_with_footer
 from ui_theme import apply_treeview_column_alignment, ModernButton, status_badge
 from ui_responsive import get_responsive_metrics, scaled_value, fit_toplevel
 from branding import get_invoice_branding
 from ui_utils import make_searchable_combobox
 from icon_system import get_action_icon
+from src.blite_v6.ui.input_behaviors import attach_first_letter_caps
 from src.blite_v6.app.window_lifecycle import hide_while_building, reveal_when_ready
 
 STATUS_COLORS = {
@@ -516,8 +517,14 @@ class AppointmentsFrame(tk.Frame):
                  bg=C["sidebar"], fg=C["text"]).pack(side=tk.LEFT)
         tk.Frame(win, bg=C["teal"], height=2).pack(fill=tk.X)
 
-        f, _canvas, _container = make_scrollable(
-            win, bg=C["bg"], padx=30, pady=10)
+        f, footer, _canvas, _container = make_toplevel_scrollable_with_footer(
+            win, bg=C["bg"], footer_bg=C["card"], padx=30, pady=10)
+
+        def _next_time_text():
+            now = datetime.now()
+            minutes = max(9 * 60, ((now.hour * 60 + now.minute + 29) // 30) * 30)
+            minutes = min(minutes, 20 * 60 + 30)
+            return (datetime(2000, 1, 1) + timedelta(minutes=minutes)).strftime("%H:%M")
 
         entries = {}
         for lbl, key, default in [
@@ -525,7 +532,7 @@ class AppointmentsFrame(tk.Frame):
             ("Phone:",             "phone",    ""),
             ("Service:",           "service",  ""),
             ("Date (DD-MM-YYYY):", "date",     today_display_str()),
-            ("Time (HH:MM, 24-hour):", "time", "10:00"),
+            ("Time (HH:MM, 24-hour):", "time", _next_time_text()),
         ]:
             tk.Label(f, text=lbl, bg=C["bg"],
                      fg=C["muted"], font=("Arial", 11 if compact else 12)).pack(anchor="w")
@@ -536,15 +543,24 @@ class AppointmentsFrame(tk.Frame):
             entries[key] = e
             if key == "date":
                 attach_date_mask(e)
+            if key in {"customer", "service"}:
+                attach_first_letter_caps(e)
 
         suggest = {"win": None, "lb": None, "items": [], "field": None}
 
         def _load_customer_rows():
+            all_customers = {}
+            try:
+                from adapters.customer_adapter import get_customers_legacy_map_v5, use_v5_customers_db
+                if use_v5_customers_db():
+                    all_customers.update(get_customers_legacy_map_v5() or {})
+            except Exception:
+                pass
             try:
                 from customers import get_customers
-                all_customers = get_customers()
+                all_customers.update(get_customers() or {})
             except Exception:
-                all_customers = {}
+                pass
 
             rows = []
             for phone, customer in all_customers.items():
@@ -781,12 +797,17 @@ class AppointmentsFrame(tk.Frame):
             except Exception as e:
                 messagebox.showerror("Error", f"Could not book: {e}")
 
-        ModernButton(f, text="Book Appointment", image=get_action_icon("add"), compound="left",
+        ModernButton(footer, text="Book Appointment", image=get_action_icon("add"), compound="left",
                      command=_save,
                      color=C["teal"], hover_color=C["blue"],
                      width=scaled_value(400, 340, 280), height=scaled_value(38, 36, 32), radius=8,
                      font=("Arial", 10 if compact else 11, "bold"),
-                     ).pack(fill=tk.X, pady=(4, 0))
+                     ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ModernButton(footer, text="Close", command=lambda: (win.grab_release(), win.destroy()),
+                     color=C["sidebar"], hover_color=C["blue"],
+                     width=scaled_value(120, 110, 96), height=scaled_value(38, 36, 32), radius=8,
+                     font=("Arial", 10 if compact else 11, "bold"),
+                     ).pack(side=tk.RIGHT, padx=(10, 0))
         reveal_when_ready(win)
 
     # ── Row selection helper ────────────────────────────

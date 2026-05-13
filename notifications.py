@@ -4,7 +4,7 @@ Checks birthdays, low stock, today's appointments on app start.
 """
 import tkinter as tk
 from datetime import date
-from utils import (C, load_json, F_CUSTOMERS, F_INVENTORY,
+from utils import (C, load_json, F_CUSTOMERS,
                    F_APPOINTMENTS, today_str)
 from ui_theme import ModernButton
 from ui_responsive import fit_toplevel, make_scrollable
@@ -47,7 +47,11 @@ def _get_all_raw() -> list:
                 "name": customer.get("name", ""),
             })
 
-    inv = load_json(F_INVENTORY, {})
+    try:
+        from inventory import get_inventory
+        inv = get_inventory()
+    except Exception:
+        inv = {}
     for name, item in inv.items():
         qty = item.get("qty", 0)
         mins = item.get("min_stock", 5)
@@ -68,11 +72,51 @@ def _get_all_raw() -> list:
                 "color": C["orange"],
             })
 
-    appts = load_json(F_APPOINTMENTS, [])
     td = today_str()
-    today_appts = [a for a in appts
-                   if a.get("date", "") == td
-                   and a.get("status", "") == "Scheduled"]
+    today_appts = []
+    seen_appts = set()
+
+    def _add_appt(row):
+        key = (
+            str(row.get("date", "")),
+            str(row.get("time", "")),
+            str(row.get("customer", "")),
+            str(row.get("phone", "")),
+            str(row.get("service", "")),
+        )
+        if key in seen_appts:
+            return
+        seen_appts.add(key)
+        today_appts.append(row)
+
+    appts = load_json(F_APPOINTMENTS, [])
+    for a in appts:
+        if a.get("date", "") == td and a.get("status", "") == "Scheduled":
+            _add_appt(dict(a))
+
+    try:
+        from booking_calendar import list_bookings, _time_display
+        for b in list_bookings(td):
+            status = str(b.get("status", "")).strip().lower()
+            if status in {"cancelled", "no_show"}:
+                continue
+            start = str(b.get("start_time", "")).strip()
+            end = str(b.get("end_time", "")).strip()
+            time_text = _time_display(start)
+            if end:
+                time_text = f"{time_text} - {_time_display(end)}"
+            _add_appt({
+                "date": td,
+                "time": time_text,
+                "customer": b.get("customer_name", ""),
+                "phone": b.get("phone", ""),
+                "service": b.get("service", ""),
+                "staff": b.get("staff", ""),
+                "status": "Scheduled" if status == "booked" else status.title(),
+            })
+    except Exception:
+        pass
+
     if today_appts:
         notes.append({
             "type": "appointments",

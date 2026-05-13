@@ -34,7 +34,7 @@ def bind_quantity_entry(owner) -> None:
 
 
 def bind_discount_entry(owner) -> None:
-    owner.disc_ent.bind("<KeyRelease>", lambda _event: owner._refresh_bill())
+    owner.disc_ent.bind("<Return>", lambda _event: owner._apply_discount_amount())
     owner.disc_ent.bind("<Button-1>", lambda _event: owner.after_idle(owner._focus_discount_entry))
     owner.disc_ent.bind("<ButtonRelease-1>", lambda _event: owner.after_idle(owner._focus_discount_entry))
     owner.disc_ent.bind("<FocusIn>", lambda _event: owner.disc_ent.select_range(0, tk.END))

@@ -73,6 +73,8 @@ def test_preferences_payload_and_saved_message():
         use_v5_product_variants_db=True,
         start_with_windows=True,
         default_report_period="Today",
+        ui_scale=1.15,
+        billing_workflow_zoom="Compact 90%",
     )
 
     assert result["salon_name"] == "Demo"
@@ -87,6 +89,8 @@ def test_preferences_payload_and_saved_message():
     assert result["use_v5_product_variants_db"] is True
     assert result["start_with_windows"] is True
     assert result["default_report_period"] == "Today"
+    assert result["ui_scale"] == 1.15
+    assert result["billing_workflow_zoom"] == "compact"
     assert preferences_saved_message(start_with_windows=False, startup_ok=False) == "Preferences saved!"
     assert "Could not set Windows startup" in preferences_saved_message(
         start_with_windows=True,
@@ -129,4 +133,3 @@ def test_salon_settings_imports_phase5_helpers():
     assert salon_settings.build_preferences_payload is preferences.build_preferences_payload
     assert salon_settings.build_notifications_payload is notifications.build_notifications_payload
     assert salon_settings.dismissed_count_label is notifications.dismissed_count_label
-

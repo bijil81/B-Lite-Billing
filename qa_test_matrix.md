@@ -1,6 +1,6 @@
 # QA Test Matrix (Phase-2, CI-Ready)
 
-Last updated: 2026-04-29
+Last updated: 2026-05-10 14:28 +05:30
 Scope: Tkinter salon billing production audit baseline
 
 ## Test Suites
@@ -65,7 +65,8 @@ Scope: Tkinter salon billing production audit baseline
   - Covered: V6 client verifies signed tokens with public-key material only
   - Covered: V6 client no longer exposes HMAC signing/keygen secrets
   - Covered: Phase L1 external admin signer/token generator for activation and trial extension
-  - Gate pending: source-mode and built-EXE activation smoke with a real V6 signed token
+  - Covered: production 2048-bit key ceremony and private-key custody outside the project folder
+  - Gate pending: source-mode and built-EXE activation smoke with a real V6 signed token after latest EXE rebuild
 
 - **Packaging hygiene**
   - Covered: spec-level exclusion checks for `licensing_admin`, tests, pytest, and dev tooling
@@ -78,6 +79,7 @@ Scope: Tkinter salon billing production audit baseline
 
 - Run full regression:
   - `python -m pytest -q`
+  - Latest local result: `467 passed` on 2026-05-10
 
 - Run only critical production gate:
   - `python -m pytest -m critical -q`
@@ -113,4 +115,4 @@ Suggested artifact command:
 - Any unresolved issue in `known_issues.md` Critical section without explicit waiver
 - Any DB migration apply on production data without a staging dry-run and backup confirmation
 - Any release build where `licensing_admin`, private keys, tests, pytest, or dev artifacts appear in `dist/`
-- Any V6 verify-only release without a working external V6 signer and manual activation smoke
+- Any V6 verify-only release without the secure private key, matching public fingerprint, and manual activation smoke

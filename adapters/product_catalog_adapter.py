@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from salon_settings import get_settings
 from services_v5.product_catalog_service import ProductCatalogService
-from utils import F_INVENTORY, F_SERVICES, app_log, build_item_codes, load_json
+from services_v5.service_master_service import ServiceMasterService
+from utils import F_INVENTORY, app_log, build_item_codes, load_json
 from src.blite_v6.inventory_grocery.billing_inventory_bridge import (
     append_inventory_product_matches,
     iter_inventory_billing_rows,
@@ -14,10 +15,14 @@ from src.blite_v6.inventory_grocery.billing_inventory_bridge import (
 
 
 _PRODUCT_SERVICE = ProductCatalogService()
+_SERVICE_MASTER = ServiceMasterService()
 
 
 def _load_inventory_for_billing() -> dict:
     """Read the active inventory source used by InventoryFrame saves."""
+    inventory = load_json(F_INVENTORY, {})
+    if inventory:
+        return inventory
     try:
         from services_v5.inventory_service import InventoryService
         inventory = InventoryService().build_legacy_inventory_map()
@@ -25,7 +30,7 @@ def _load_inventory_for_billing() -> dict:
             return inventory
     except Exception as exc:
         app_log(f"[_load_inventory_for_billing] InventoryService fallback: {exc}")
-    return load_json(F_INVENTORY, {})
+    return inventory
 
 
 def use_v5_product_variants_db() -> bool:
@@ -72,10 +77,14 @@ def refresh_product_catalog_cache() -> None:
 
 
 def get_billing_services_products_snapshot() -> tuple[dict, dict]:
-    data = load_json(F_SERVICES, {})
     inventory = _load_inventory_for_billing()
-    services = data.get("Services", {}) if ("Services" in data or "Products" in data) else data
-    legacy_products = data.get("Products", {}) if ("Services" in data or "Products" in data) else {}
+    services = _SERVICE_MASTER.list_grouped_services(active_only=True)
+    legacy_products = {}
+    for name, item in inventory.items():
+        category = str(item.get("category", "")).strip() or "General"
+        legacy_products.setdefault(category, {})[name] = float(
+            item.get("price", item.get("sale_price", item.get("cost", 0.0))) or 0.0
+        )
 
     if not use_v5_product_variants_db():
         return services, merge_inventory_products(legacy_products, inventory)

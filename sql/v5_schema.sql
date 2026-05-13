@@ -1,4 +1,4 @@
-﻿-- v5 relational foundation schema
+-- v5 relational foundation schema
 -- additive only: safe to run alongside current legacy storage
 
 CREATE TABLE IF NOT EXISTS v5_roles (
@@ -172,7 +172,9 @@ CREATE TABLE IF NOT EXISTS v5_redeem_codes (
     min_bill REAL DEFAULT 0.0,
     active INTEGER DEFAULT 1,
     used INTEGER DEFAULT 0,
+    used_on TEXT DEFAULT '',
     used_invoice TEXT DEFAULT '',
+    note TEXT DEFAULT '',
     valid_until TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
@@ -284,6 +286,16 @@ CREATE TABLE IF NOT EXISTS v5_payments (
     reference_no TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY(invoice_id) REFERENCES v5_invoices(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS v5_due_settlements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_phone TEXT NOT NULL,
+    amount_paid REAL NOT NULL CHECK(amount_paid > 0),
+    payment_method TEXT NOT NULL,
+    receipt_no TEXT UNIQUE NOT NULL,
+    handled_by TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS v5_attendance_sessions (

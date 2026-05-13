@@ -46,7 +46,13 @@ def validate_invoice_payload(payload: dict) -> dict:
 
     if abs(expected_net_total - net_total) > 0.01:
         raise ValueError("net_total mismatch with gross/discount/tax")
-    if abs(round(payment_total, 2) - net_total) > 0.01:
-        raise ValueError("payment total mismatch with net_total")
+    customer_phone = str(payload.get("customer_phone", "") or "").strip()
+    has_credit_customer = bool(customer_phone and customer_phone != "0000000000")
+
+    # Allow partial payments only when invoice is tied to a real customer record.
+    if not has_credit_customer and round(payment_total, 2) < round(net_total, 2) - 0.01:
+        raise ValueError("payment total must cover net_total for guest bill")
+    if round(payment_total, 2) > round(net_total, 2) + 0.01:
+        raise ValueError("payment total exceeds net_total")
 
     return validated

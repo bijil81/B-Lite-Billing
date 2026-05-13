@@ -18,4 +18,17 @@ dist/
 
 licensing_admin/
 
+# RSA private key from key ceremony — NEVER commit (FIX-5 2026-05-10)
+admin_keys/
+
+# Local licensing/build helpers (keep private in public repo)
+APPLY_TRIAL_EXTENSION.bat
+GENERATE_LICENSE_KEY.bat
+GENERATE_LICENSE_KEY_CLI.bat
+GENERATE_LICENSE_KEY_SILENT.vbs
+BLiteManagement_Setup_*.exe
+
+# Local runtime databases
+*.db
+
 Thumbs.db

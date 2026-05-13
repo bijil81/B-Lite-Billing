@@ -4,6 +4,7 @@ from tkinter import ttk
 
 def render_advanced_tab(settings_frame):
     from salon_settings import C, ModernButton, feature_enabled, get_settings, load_multibranch_api_key, load_whatsapp_provider_secret
+    from src.blite_v6.settings.tab_specs import optional_sidebar_module_defs, sidebar_module_enabled
 
     cfg = get_settings()
     body = settings_frame._scroll("advanced")
@@ -26,6 +27,31 @@ def render_advanced_tab(settings_frame):
         {"label": "Mobile Viewer", "state": "ON" if settings_frame._feature_mobile.get() else "OFF", "caption": "Optional tab inside Cloud Sync only.", "color": C["green"] if settings_frame._feature_mobile.get() else C["muted"]},
         {"label": "Premium APIs", "state": "READY" if (settings_frame._feature_wa_api.get() or settings_frame._feature_multibranch.get()) else "OFF", "caption": "Customer-funded optional integrations.", "color": C["gold"] if (settings_frame._feature_wa_api.get() or settings_frame._feature_multibranch.get()) else C["muted"]},
     ])
+
+    tabs_sec = settings_frame._sec(body, "Optional Tabs", C["blue"])
+    tk.Label(
+        tabs_sec,
+        text="Choose which left sidebar modules the customer really needs. Dashboard, Billing, AI Assistant, and Settings stay controlled separately.",
+        bg=C["card"],
+        fg=C["muted"],
+        justify="left",
+        font=("Arial", 10),
+        wraplength=720,
+    ).pack(anchor="w", pady=(0, 8))
+    settings_frame._sidebar_module_vars = {}
+    grid = tk.Frame(tabs_sec, bg=C["card"])
+    grid.pack(fill=tk.X, pady=(0, 4))
+    module_defs = optional_sidebar_module_defs()
+    for idx, (key, label) in enumerate(module_defs):
+        var = tk.BooleanVar(value=sidebar_module_enabled(cfg, key))
+        settings_frame._sidebar_module_vars[key] = var
+        row = idx // 2
+        col = idx % 2
+        cell = tk.Frame(grid, bg=C["card"])
+        cell.grid(row=row, column=col, sticky="w", padx=(0, 24), pady=2)
+        settings_frame._chk(cell, f"Show {label}", var)
+    for col in range(2):
+        grid.grid_columnconfigure(col, weight=1)
 
     wa_cfg = cfg.get("whatsapp_api_config", {})
     wa_sec = settings_frame._sec(body, "WhatsApp API Providers", C["teal"])
@@ -78,4 +104,3 @@ def render_advanced_tab(settings_frame):
     tk.Label(exp_sec, text="Mobile Viewer, WhatsApp API providers, and Multi-Branch sync are optional. Save settings, then reopen the related module to refresh its advanced UI.", bg=C["card"], fg=C["muted"], justify="left", font=("Arial", 10)).pack(anchor="w")
 
     settings_frame._savebtn(body, "Save Advanced Features", settings_frame._save_advanced)
-

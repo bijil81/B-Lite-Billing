@@ -11,6 +11,7 @@ from utils import (C, load_json, safe_float,
                    popup_window, app_log)
 from date_helpers import attach_date_mask, display_to_iso_date, iso_to_display_date, today_display_str, validate_display_date
 from ui_theme import apply_treeview_column_alignment, ModernButton, ensure_segoe_ttk_font
+from ui_responsive import make_toplevel_scrollable_with_footer
 from icon_system import get_action_icon
 from services_v5.offers_service import OffersService
 from src.blite_v6.app.window_lifecycle import hide_while_building, reveal_when_ready
@@ -71,29 +72,45 @@ def _load_legacy_offers() -> list:
 
 
 def get_offers() -> list:
-    offers = _OFFERS_SERVICE.get_all()
-    if offers:
-        cleaned, changed = _clean_offer_list(offers)
-        if changed:
-            _OFFERS_SERVICE.save_all(cleaned)
-        return cleaned
+    from adapters.offers_adapter import use_v5_offers_db, get_offers_legacy_map_v5
+    if use_v5_offers_db():
+        offers = get_offers_legacy_map_v5()
+        if offers:
+            cleaned, changed = _clean_offer_list(offers)
+            if changed:
+                save_offers(cleaned)
+            return cleaned
+        return []
     return _load_legacy_offers()
 
 
 def save_offers(data: list) -> bool:
+    from adapters.offers_adapter import use_v5_offers_db, save_offers_legacy_map_v5
     cleaned, _ = _clean_offer_list(data)
-    _OFFERS_SERVICE.save_all(cleaned)
+    if use_v5_offers_db():
+        save_offers_legacy_map_v5(cleaned)
+        return True
+    
+    from utils import save_json, F_OFFERS
+    save_json(F_OFFERS, cleaned)
     return True
 
 
 def get_active_offers() -> list:
+    from adapters.offers_adapter import use_v5_offers_db, get_offers_legacy_map_v5
     td = today_str()
-    offers = _OFFERS_SERVICE.get_active(td)
-    if offers:
-        cleaned, changed = _clean_offer_list(offers)
-        if changed:
-            _OFFERS_SERVICE.save_all(get_offers())
-        return cleaned
+    if use_v5_offers_db():
+        offers = get_offers()  # Uses adapter internally
+        result = []
+        for o in offers:
+            if not o.get("active", True):
+                continue
+            start = o.get("valid_from", "2000-01-01")
+            end = o.get("valid_to", "2099-12-31")
+            if start <= td <= end:
+                result.append(o)
+        return result
+    
     result = []
     for o in _load_legacy_offers():
         if not o.get("active", True):
@@ -129,16 +146,18 @@ def apply_offer(offer: dict, bill_items: list, subtotal: float) -> float:
 
 
 def find_coupon(code: str):
-    offer = _OFFERS_SERVICE.find_coupon(code, today_str())
-    if offer:
-        clean = _clean_offer_payload(offer)
-        if clean != offer:
-            _OFFERS_SERVICE.save_offer(clean)
-        return clean
+    from adapters.offers_adapter import use_v5_offers_db
     target = str(code or "").strip().upper()
     if not target:
         return None
     td = today_str()
+    
+    if use_v5_offers_db():
+        for offer in get_active_offers():
+            if str(offer.get("coupon_code", "")).strip().upper() == target:
+                return offer
+        return None
+
     for o in _load_legacy_offers():
         if not o.get("active", True):
             continue
@@ -281,18 +300,27 @@ class OffersFrame(tk.Frame):
 
         bb = tk.Frame(rail, bg=C["card"])
         bb.pack(fill=tk.X, padx=12)
-        for txt, icon_name, clr, hclr, cmd in [
-            ("Edit",          "edit",    C["blue"],   "#154360",  self._edit_dialog),
-            ("Toggle Active", "refresh", C["orange"], "#d35400",  self._toggle),
-            ("Delete",        "delete",  C["red"],    "#c0392b",  self._delete),
-        ]:
-            ModernButton(bb, text=txt, image=get_action_icon(icon_name), compound="left", command=cmd,
-                         color=clr, hover_color=hclr,
-                         width=180, height=38, radius=8,
-                         font=("Segoe UI", 10, "bold"),
-                         ).pack(fill=tk.X, pady=5)
+        self.edit_btn = ModernButton(
+            bb, text="Edit", image=get_action_icon("edit"), compound="left",
+            command=self._edit_dialog, color=C["blue"], hover_color="#154360",
+            width=180, height=38, radius=8, font=("Segoe UI", 10, "bold"),
+        )
+        self.edit_btn.pack(fill=tk.X, pady=5)
+        self.toggle_btn = ModernButton(
+            bb, text="Deactivate", image=get_action_icon("refresh"), compound="left",
+            command=self._toggle, color=C["orange"], hover_color="#d35400",
+            width=180, height=38, radius=8, font=("Segoe UI", 10, "bold"),
+        )
+        self.toggle_btn.pack(fill=tk.X, pady=5)
+        self.delete_btn = ModernButton(
+            bb, text="Delete", image=get_action_icon("delete"), compound="left",
+            command=self._delete, color=C["red"], hover_color="#c0392b",
+            width=180, height=38, radius=8, font=("Segoe UI", 10, "bold"),
+        )
+        self.delete_btn.pack(fill=tk.X, pady=5)
 
         self.tree.bind("<Double-1>", lambda _e: self._edit_dialog())
+        self.tree.bind("<<TreeviewSelect>>", lambda _e: self._update_action_buttons())
         self._load()
 
     def _load(self):
@@ -355,15 +383,52 @@ class OffersFrame(tk.Frame):
             tk.Label(card, text=lbl,
                      font=("Segoe UI", 10),
                      bg=col, fg="white").pack()
+        self._restore_selection()
+        self._update_action_buttons()
+
+    def _restore_selection(self):
+        target = getattr(self, "_selected_offer_name", "")
+        if not target:
+            return
+        try:
+            for item_id in self.tree.get_children():
+                values = self.tree.item(item_id, "values")
+                if values and str(values[0]) == target:
+                    self.tree.selection_set(item_id)
+                    self.tree.focus(item_id)
+                    self.tree.see(item_id)
+                    return
+        except Exception as e:
+            app_log(f"[OffersFrame._restore_selection] {e}")
+
+    def _update_action_buttons(self):
+        try:
+            if not hasattr(self, "toggle_btn"):
+                return
+            sel = self.tree.selection()
+            if not sel:
+                self.toggle_btn.set_text("Deactivate")
+                self.toggle_btn.set_color(C["orange"], "#d35400")
+                return
+            values = self.tree.item(sel[0], "values")
+            status = str(values[6] if len(values) > 6 else "").strip().lower()
+            if status == "inactive":
+                self.toggle_btn.set_text("Activate")
+                self.toggle_btn.set_color(C["green"], C["teal"])
+            else:
+                self.toggle_btn.set_text("Deactivate")
+                self.toggle_btn.set_color(C["orange"], "#d35400")
+        except Exception as e:
+            app_log(f"[OffersFrame._update_action_buttons] {e}")
 
     def _offer_form(self, title: str, offer: dict = None):
         o   = offer or {}
         win = tk.Toplevel(self)
         hide_while_building(win)
         win.title(title)
-        popup_window(win, 580, 660)
+        popup_window(win, 780, 840)
         win.configure(bg=C["bg"])
-        win.minsize(520, 500)
+        win.minsize(720, 720)
         win.resizable(True, True)
         win.grab_set()
         win.protocol("WM_DELETE_WINDOW",
@@ -371,22 +436,13 @@ class OffersFrame(tk.Frame):
 
         tk.Label(win, text=title,
                  font=("Segoe UI", 13, "bold"),
-                 bg=C["bg"], fg=C["text"]).pack(pady=(15, 5))
+                 bg=C["bg"], fg=C["text"]).pack(pady=(12, 4))
 
-        # Scrollable body
-        canvas = tk.Canvas(win, bg=C["bg"], highlightthickness=0)
-        vsb    = ttk.Scrollbar(win, orient="vertical",
-                                command=canvas.yview)
-        canvas.configure(yscrollcommand=vsb.set)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        canvas.pack(fill=tk.BOTH, expand=True)
-        f = tk.Frame(canvas, bg=C["bg"], padx=30)
-        cw = canvas.create_window((0, 0), window=f, anchor="nw")
-        f.bind("<Configure>",
-               lambda e: canvas.configure(
-                   scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>",
-                    lambda e: canvas.itemconfig(cw, width=e.width))
+        # Shared scroll helper keeps mouse-wheel/default scroll behavior
+        # consistent with other long production forms.
+        f, footer, _canvas, _container = make_toplevel_scrollable_with_footer(
+            win, bg=C["bg"], footer_bg=C["card"], padx=30, pady=6
+        )
 
         def row(lbl, widget_fn):
             tk.Label(f, text=lbl, bg=C["bg"],
@@ -556,12 +612,17 @@ class OffersFrame(tk.Frame):
             self._load()
             messagebox.showinfo("Saved", f"Offer '{nm}' saved!")
 
-        ModernButton(f, text="Save Offer", image=get_action_icon("save"), compound="left",
+        ModernButton(footer, text="Save Offer", image=get_action_icon("save"), compound="left",
                      command=_save,
                      color=C["teal"], hover_color=C["blue"],
                      width=380, height=40, radius=8,
                      font=("Segoe UI", 11, "bold"),
-                     ).pack(fill=tk.X, pady=(16, 0))
+                     ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ModernButton(footer, text="Close", command=lambda: (win.grab_release(), win.destroy()),
+                     color=C["sidebar"], hover_color=C["blue"],
+                     width=120, height=40, radius=8,
+                     font=("Segoe UI", 10, "bold"),
+                     ).pack(side=tk.RIGHT, padx=(10, 0))
         reveal_when_ready(win)
 
     def _get_selected(self):
@@ -571,6 +632,7 @@ class OffersFrame(tk.Frame):
             return None, None
         v      = self.tree.item(sel[0], "values")
         name   = v[0]
+        self._selected_offer_name = name
         offers = get_offers()
         obj    = next((o for o in offers
                         if o.get("name") == name), None)
@@ -587,6 +649,7 @@ class OffersFrame(tk.Frame):
         self._offer_form(f"Edit Offer: {name}", obj)
 
     def _toggle(self):
+        if self._rbac_denied(): return
         name, obj = self._get_selected()
         if not obj: return
         from datetime import date
@@ -605,6 +668,7 @@ class OffersFrame(tk.Frame):
                         ).strftime("%Y-%m-%d")
                 break
         save_offers(offers)
+        self._selected_offer_name = name
         self._load()
 
     def _delete(self):
@@ -613,9 +677,18 @@ class OffersFrame(tk.Frame):
         if not obj: return
         if messagebox.askyesno("Delete",
                                 f"Delete offer '{name}'?"):
-            offers = [o for o in get_offers()
-                       if o.get("name") != name]
-            save_offers(offers)
+            try:
+                from adapters.offers_adapter import use_v5_offers_db, hard_delete_offer_v5
+                if use_v5_offers_db():
+                    hard_delete_offer_v5(name)
+                else:
+                    offers = [o for o in get_offers()
+                              if o.get("name") != name]
+                    save_offers(offers)
+            except Exception as e:
+                messagebox.showerror("Delete Error", f"Could not delete offer:\n{e}")
+                return
+            self._selected_offer_name = ""
             self._load()
 
     def _load_offer_templates(self):
@@ -651,8 +724,3 @@ class OffersFrame(tk.Frame):
 
     def refresh(self):
         self._load()
-
-
-
-
-

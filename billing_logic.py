@@ -107,13 +107,15 @@ def _auto_sync() -> None:
     try:
         from cloud_sync import auto_sync
         auto_sync()
-    except Exception:
-        pass
+    except Exception as e:
+        app_log(f"[billing_logic._auto_sync] Cloud sync failed (non-critical): {e}")
+
 
 
 def _log_event(*args, **kwargs) -> None:
     try:
         from activity_log import log_event
         log_event(*args, **kwargs)
-    except Exception:
-        pass
+    except Exception as e:
+        app_log(f"[billing_logic._log_event] Activity log failed (non-critical): {e}")
+

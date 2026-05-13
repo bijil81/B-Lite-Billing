@@ -3,6 +3,8 @@ from __future__ import annotations
 from src.blite_v6.settings.tab_specs import (
     advanced_feature_status_items,
     optional_tab_plan,
+    optional_sidebar_module_defs,
+    sidebar_module_enabled,
     settings_tab_defs,
 )
 
@@ -79,10 +81,19 @@ def test_advanced_feature_status_items_match_existing_copy_and_colors():
     ]
 
 
+def test_optional_sidebar_module_helpers_keep_required_tabs_visible():
+    defs = dict(optional_sidebar_module_defs())
+    assert defs["appointments"] == "Appointments"
+    assert defs["inventory"] == "Inventory"
+    assert sidebar_module_enabled({"sidebar_module_visibility": {"appointments": False}}, "appointments") is False
+    assert sidebar_module_enabled({"sidebar_module_visibility": {"appointments": False}}, "inventory") is True
+    assert sidebar_module_enabled({"sidebar_module_visibility": {"dashboard": False}}, "dashboard") is True
+    assert sidebar_module_enabled({"feature_ai_assistant": False}, "ai_assistant") is False
+
+
 def test_salon_settings_imports_tab_spec_helpers():
     import salon_settings
 
     assert salon_settings.settings_tab_defs is settings_tab_defs
     assert salon_settings.optional_tab_plan is optional_tab_plan
     assert salon_settings.advanced_feature_status_items is advanced_feature_status_items
-

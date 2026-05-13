@@ -76,7 +76,8 @@ def build_inventory_product_form_payload(
     base_product = _text(raw.get("base_product"), name)
     cost_price = raw.get("cost_price", raw.get("cost", 0))
     sale_price = raw.get("sale_price", raw.get("price", cost_price))
-    stock_qty = raw.get("stock_qty", raw.get("qty", 0))
+    # Keep missing stock empty so import preview can validate non-stock fields first.
+    stock_qty = raw.get("stock_qty", raw.get("qty", ""))
     reorder_level = raw.get("reorder_level", raw.get("min_stock", 0))
     allow_decimal = _bool(raw.get("allow_decimal_qty"), unit in DECIMAL_QTY_UNITS)
     is_weighed = _bool(raw.get("is_weighed"), unit in {"kg", "g"})

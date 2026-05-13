@@ -32,7 +32,8 @@ def right_align(label: str, value: str, total_width: int,
         label_max = total_width - len(value_str) - 1
     label_max = max(1, label_max)
     lbl = str(label)[:label_max]
-    return f"{lbl:>{label_max}} {value_str:>{total_width - label_max - 1}}"
+    value_width = max(1, total_width - label_max - 1)
+    return f"{lbl:<{label_max}} {value_str:>{value_width}}"
 
 
 def separator(char: str, width: int) -> str:
@@ -263,11 +264,13 @@ def build_totals_lines(subtotal: float, discount: float,
                        offer_discount: float, offer_name: str,
                        redeem_discount: float, redeem_code: str,
                        gst_amount: float, gst_rate: float, gst_type: str,
-                       grand_total: float, width: int,
-                       settings: dict,
+                       grand_total: float, amount_paid: float, unpaid_amount: float, 
+                       width: int, settings: dict,
                        gst_breakdown: list | tuple | None = None,
                        taxable_amount: float | None = None,
-                       gst_mode: str = "global") -> List[str]:
+                       gst_mode: str = "global",
+                       wallet_used: float = 0.0,
+                       wallet_balance_after: float = 0.0) -> List[str]:
     """Build totals section lines driven by settings."""
     lines = []
 
@@ -285,6 +288,7 @@ def build_totals_lines(subtotal: float, discount: float,
         offer_discount > 0 and settings.get("show_offer_discount"),
         redeem_discount > 0,
         gst_amount > 0   and settings.get("show_gst"),
+        wallet_used > 0,
     ])
 
     if settings.get("show_subtotal", True) and has_any_discount:
@@ -330,6 +334,16 @@ def build_totals_lines(subtotal: float, discount: float,
             lines.append(center_text(f"TOTAL: Rs.{grand_total:.2f}", width))
         else:
             lines.append(right_align("GRAND TOTAL", f"{grand_total:.2f}", width, lw))
+
+    if wallet_used > 0:
+        lines.append(right_align("Wallet Paid", f"{wallet_used:.2f}", width, lw))
+        lines.append(right_align("Wallet Bal", f"{wallet_balance_after:.2f}", width, lw))
+        payable_now = max(0.0, grand_total - wallet_used)
+        lines.append(right_align("PAYABLE", f"{payable_now:.2f}", width, lw))
+            
+    if unpaid_amount > 0 or amount_paid < grand_total:
+        lines.append(right_align("Paid", f"{amount_paid:.2f}", width, lw))
+        lines.append(right_align("Due", f"{unpaid_amount:.2f}", width, lw))
 
     return lines
 

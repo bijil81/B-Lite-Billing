@@ -21,13 +21,14 @@ from utils import (C, load_json, save_json, safe_float, safe_int,
 from barcode_utils import generate_barcode_from_product_code
 from ui_theme import ModernButton
 from ui_theme import apply_treeview_column_alignment, ModernButton
-from ui_responsive import make_scrollable
+from ui_responsive import _is_dropdown_wheel_target, make_scrollable
 from ui_utils import make_searchable_combobox
 from icon_system import get_action_icon
 from services_v5.inventory_service import InventoryService
 from services_v5.purchase_service import PurchaseService
 from soft_delete import get_deleted_products, restore_product, permanent_delete_product
 from src.blite_v6.app.window_lifecycle import hide_while_building, reveal_when_ready
+from src.blite_v6.text_normalization import smart_title_name
 from src.blite_v6.inventory_grocery.gst_autofill import resolve_inventory_gst_rate
 from src.blite_v6.inventory_grocery.product_form import (
     FORM_UNITS,
@@ -35,10 +36,22 @@ from src.blite_v6.inventory_grocery.product_form import (
     default_sale_unit,
     should_show_grocery_controls,
 )
+from src.blite_v6.inventory_grocery.category_master import (
+    ensure_catalog_category,
+    list_catalog_categories,
+)
+from src.blite_v6.inventory_grocery.qty_parser import parse_qty_expression
 from src.blite_v6.inventory_grocery.product_import_dialog import open_product_import_preview_dialog
 from src.blite_v6.inventory_grocery.purchase_form import (
     build_purchase_invoice_payload,
     purchase_item_defaults,
+)
+from src.blite_v6.inventory_grocery.purchase_item_selector import (
+    category_exists,
+    filter_purchase_items,
+    normalize_category_name,
+    purchase_item_categories,
+    purchase_item_names,
 )
 from src.blite_v6.inventory_grocery.purchase_history_dialog import open_purchase_history_dialog
 from src.blite_v6.inventory_grocery.vendor_master_dialog import open_vendor_master_dialog
@@ -63,52 +76,55 @@ def _is_light_theme():
     return luminance >= 180
 
 
+def _purchase_item_names(inv: dict) -> list[str]:
+    return purchase_item_names(inv)
+
+
 def deduct_inventory_for_sale(bill_items: list):
     """
     Auto-deduct product quantities when a bill is saved.
     Only deducts items with mode='products'.
     Called from billing._save_report() after every bill save.
+    Exceptions bubble up to trigger transaction rollback.
     """
-    try:
-        from repositories.product_variants_repo import ProductVariantsRepository
-        from salon_settings import get_settings
+    from repositories.product_variants_repo import ProductVariantsRepository
+    from salon_settings import get_settings
 
-        products = [it for it in bill_items if it.get("mode") == "products"]
-        if not products:
-            return
-        inv = get_inventory()
-        changed = False
-        use_v5 = bool(get_settings().get("use_v5_product_variants_db", False))
-        variants_repo = ProductVariantsRepository() if use_v5 else None
-        for it in products:
-            name = it.get("inventory_item_name", it.get("name", "")).strip()
-            qty  = safe_float(it.get("qty", 1), 1.0)
-            if use_v5 and variants_repo and it.get("variant_id"):
-                try:
-                    variants_repo.add_stock_movement({
-                        "variant_id": int(it.get("variant_id")),
-                        "movement_type": "sale",
-                        "qty_delta": -qty,
-                        "reference_type": "bill",
-                        "reference_id": "",
-                        "note": it.get("name", ""),
-                    })
-                except Exception as ve:
-                    app_log(f"[deduct_inventory_for_sale v5] {ve}")
-            # Try exact match first, then case-insensitive
-            if name in inv:
-                inv[name]["qty"] = max(0.0, safe_float(inv[name].get("qty", 0), 0.0) - qty)
-                changed = True
-            else:
-                for key in inv:
-                    if key.lower() == name.lower():
-                        inv[key]["qty"] = max(0.0, safe_float(inv[key].get("qty", 0), 0.0) - qty)
-                        changed = True
-                        break
-        if changed:
-            save_inventory(inv)
-    except Exception as e:
-        app_log(f"[deduct_inventory_for_sale] {e}")
+    products = [it for it in bill_items if it.get("mode") == "products"]
+    if not products:
+        return
+    inv = get_inventory()
+    changed = False
+    use_v5 = bool(get_settings().get("use_v5_product_variants_db", False))
+    variants_repo = ProductVariantsRepository() if use_v5 else None
+    for it in products:
+        name = it.get("inventory_item_name", it.get("name", "")).strip()
+        qty  = safe_float(it.get("qty", 1), 1.0)
+        if use_v5 and variants_repo and it.get("variant_id"):
+            try:
+                variants_repo.add_stock_movement({
+                    "variant_id": int(it.get("variant_id")),
+                    "movement_type": "sale",
+                    "qty_delta": -qty,
+                    "reference_type": "bill",
+                    "reference_id": "",
+                    "note": it.get("name", ""),
+                })
+            except Exception as ve:
+                app_log(f"[deduct_inventory_for_sale v5] {ve}")
+        # Try exact match first, then case-insensitive
+        if name in inv:
+            inv[name]["qty"] = max(0.0, safe_float(inv[name].get("qty", 0), 0.0) - qty)
+            changed = True
+        else:
+            for key in inv:
+                if key.lower() == name.lower():
+                    inv[key]["qty"] = max(0.0, safe_float(inv[key].get("qty", 0), 0.0) - qty)
+                    changed = True
+                    break
+    if changed:
+        save_inventory(inv)
+
 
 
 class InventoryFrame(tk.Frame):
@@ -167,6 +183,20 @@ class InventoryFrame(tk.Frame):
                      width=150, height=36, radius=8,
                      font=("Arial",10,"bold"),
                      ).pack(side=tk.RIGHT, padx=(0, 0), pady=6)
+        ModernButton(hdr, text="Add Product",
+                     image=edit_icon, compound="left",
+                     command=self._open_admin_products,
+                     color=C["blue"], hover_color="#154360",
+                     width=162, height=36, radius=8,
+                     font=("Arial",10,"bold"),
+                     ).pack(side=tk.RIGHT, padx=(0, 10), pady=6)
+        ModernButton(hdr, text="Add Services",
+                     image=edit_icon, compound="left",
+                     command=self._open_admin_services,
+                     color=C["teal"], hover_color=C["green"],
+                     width=162, height=36, radius=8,
+                     font=("Arial",10,"bold"),
+                     ).pack(side=tk.RIGHT, padx=(0, 10), pady=6)
         tk.Frame(self, bg=C["teal"], height=2).pack(fill=tk.X)
 
         top_band = tk.Frame(self, bg=C["bg"])
@@ -301,8 +331,11 @@ class InventoryFrame(tk.Frame):
         tk.Label(qrow, text="Type:", bg=C["card"],
                  fg=C["muted"], font=("Arial",11)).pack(side=tk.LEFT, padx=(0,4))
         self.q_type = tk.StringVar(value="Add (Purchase)")
+        quick_types = ["Add (Purchase)"]
+        if self._can_stock_correct():
+            quick_types.append("Set (Correction)")
         ttk.Combobox(qrow, textvariable=self.q_type,
-                     values=["Add (Purchase)","Remove (Use)","Set (Correction)"],
+                     values=quick_types,
                      state="readonly", font=("Arial",12),
                      width=18).pack(side=tk.LEFT, padx=(0,10))
 
@@ -428,6 +461,16 @@ class InventoryFrame(tk.Frame):
                              "Inventory management is restricted for your role.")
         return True
 
+    def _can_stock_correct(self) -> bool:
+        """Owner/Admin-only exact stock correction gate."""
+        try:
+            user = getattr(self.app, "current_user", {}) or {}
+            role = str(user.get("role", "")).strip().lower()
+            username = str(user.get("username", "")).strip().lower()
+            return role in {"owner", "admin"} or username == "admin"
+        except Exception:
+            return False
+
     # ── Sort ───────────────────────────────────
     def _sort(self, col):
         self._sort_rev = not self._sort_rev if self._sort_col==col else False
@@ -443,6 +486,16 @@ class InventoryFrame(tk.Frame):
 
     def _load_inner(self, low_only=False):
         for i in self.tree.get_children(): self.tree.delete(i)
+        try:
+            removed_services = InventoryService().purge_service_named_items()
+            if removed_services:
+                app_log(
+                    "[inventory] deactivated service rows from inventory: "
+                    + ", ".join(removed_services[:20])
+                    + ("..." if len(removed_services) > 20 else "")
+                )
+        except Exception as e:
+            app_log(f"[inventory] service-row cleanup skipped: {e}")
         inv   = get_inventory()
         q     = self.search_var.get().lower()
         cat_f = self.cat_filter.get()
@@ -495,8 +548,8 @@ class InventoryFrame(tk.Frame):
                     "Status","Cost Rs","Value Rs","Updated"].index(self._sort_col)
         try:
             rows.sort(key=lambda r: r[col_idx], reverse=self._sort_rev)
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[inventory._load] sort failed: {e}")
 
         # Pagination: clamp page and slice
         total = len(rows)
@@ -617,10 +670,15 @@ class InventoryFrame(tk.Frame):
         self._load()
 
     # ── Item Form ──────────────────────────────
-    def _item_form(self, title, name="", edit=False):
+    def _item_form(self, title, name="", edit=False, *, initial_category="", on_saved=None):
         inv  = get_inventory()
         item = inv.get(name,{})
-        categories = sorted({str(v.get("category", "")).strip() for v in inv.values() if str(v.get("category", "")).strip()})
+        categories = sorted({
+            str(v.get("category", "")).strip()
+            for v in inv.values()
+            if str(v.get("category", "")).strip()
+        } | set(list_catalog_categories("Products"))
+          | ({normalize_category_name(initial_category)} if normalize_category_name(initial_category) else set()))
         brands = sorted({str(v.get("brand", "")).strip() for v in inv.values() if str(v.get("brand", "")).strip()})
         base_products = sorted({
             str(v.get("base_product", k)).strip()
@@ -636,19 +694,19 @@ class InventoryFrame(tk.Frame):
             win.minsize(760, 640)
             win.resizable(True, True)
             win.attributes("-topmost", False)
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[_item_form] window setup failed: {e}")
         def _close_dialog(event=None):
             try:
                 if win.grab_current() == win:
                     win.grab_release()
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_item_form._close_dialog] grab_release failed: {e}")
             try:
                 if win.winfo_exists():
                     win.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_item_form._close_dialog] destroy failed: {e}")
             return "break" if event is not None else None
         win.protocol("WM_DELETE_WINDOW", _close_dialog)
         win.bind("<Escape>", _close_dialog)
@@ -672,13 +730,13 @@ class InventoryFrame(tk.Frame):
         def _bind_form_scroll(widget):
             try:
                 widget.bind("<MouseWheel>", _scroll_form, add="+")
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_bind_form_scroll] bind failed: {e}")
             try:
                 for child in widget.winfo_children():
                     _bind_form_scroll(child)
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_bind_form_scroll] child bind failed: {e}")
 
         f.grid_columnconfigure(0, weight=1)
         f.grid_columnconfigure(1, weight=1)
@@ -698,7 +756,7 @@ class InventoryFrame(tk.Frame):
         unit_default = default_sale_unit(item.get("unit", "pcs") or "pcs")
         sale_unit_default = default_sale_unit(item.get("sale_unit", unit_default) or unit_default)
         base_unit_default = default_sale_unit(item.get("base_unit", sale_unit_default) or sale_unit_default)
-        initial_category_value = str(item.get("category", "")).strip()
+        initial_category_value = str(item.get("category", "")).strip() or normalize_category_name(initial_category)
         initial_name_value = str(item.get("name", "")).strip() or name
         initial_base_product_value = str(item.get("base_product", "")).strip()
         initial_hsn_sac_value = str(item.get("hsn_sac", "")).strip()
@@ -747,7 +805,7 @@ class InventoryFrame(tk.Frame):
             entries[key] = e
             return e
 
-        category_combo = _combo(left_col, "Category:", "category", categories, item.get("category", ""), readonly=False)
+        category_combo = _combo(left_col, "Category:", "category", categories, initial_category_value, readonly=False)
         _combo(left_col, "Brand (Optional):", "brand", brands, item.get("brand", ""), readonly=True)
         _combo(left_col, "Base Product (Optional):", "base_product", base_products, item.get("base_product", name), readonly=True)
         _entry(left_col, "Item Name:", "name", name, disabled=edit)
@@ -769,7 +827,7 @@ class InventoryFrame(tk.Frame):
                 "category": category_combo.get().strip(),
                 "hsn_sac": entries["hsn_sac"].get().strip() if "hsn_sac" in entries else "",
                 "sku": entries["sku"].get().strip() if "sku" in entries else "",
-                "barcode": entries.get("barcode", bc_entry).get().strip(),
+                "barcode": entries["barcode"].get().strip() if "barcode" in entries else "",
             }
             resolved_rate = resolve_inventory_gst_rate(preview_payload, settings=settings_snapshot)
             if resolved_rate is None:
@@ -803,8 +861,6 @@ class InventoryFrame(tk.Frame):
             entries["hsn_sac"].bind("<FocusOut>", lambda event: _maybe_autofill_gst_rate(event))
         if "sku" in entries:
             entries["sku"].bind("<FocusOut>", lambda event: _maybe_autofill_gst_rate(event))
-        bc_entry.bind("<FocusOut>", lambda event: _maybe_autofill_gst_rate(event))
-        _maybe_autofill_gst_rate(force=not gst_manual_override)
 
         unit_combo = _combo(right_col, "Unit (Measurement):", "unit", FORM_UNITS, unit_default, readonly=True)
         sale_unit_combo = _combo(right_col, "Sale Unit / Price Basis:", "sale_unit", FORM_UNITS, sale_unit_default, readonly=True)
@@ -813,7 +869,13 @@ class InventoryFrame(tk.Frame):
         else:
             base_unit_combo = None
         _entry(right_col, "Pack Size Value (Optional):", "pack_size", str(item.get("pack_size", "")))
-        _entry(right_col, "Quantity:", "qty", str(item.get("qty", 0)))
+        qty_entry = _entry(right_col, "Quantity:", "qty", str(item.get("qty", 0)), disabled=edit)
+        if edit:
+            tk.Label(
+                right_col,
+                text="Stock quantity is locked here. Use Purchase Bill, Quick Stock Update, or Reduce Stock with reason.",
+                bg=C["bg"], fg=C["muted"], font=("Arial", 9), wraplength=320, justify="left",
+            ).pack(anchor="w", pady=(3, 0))
         _entry(right_col, "Min Stock Alert:", "min_stock", str(item.get("min_stock", 5)))
         _entry(right_col, "Cost per Unit (Rs):", "cost", str(item.get("cost", 0)))
         _entry(right_col, "Sale Price (Rs):", "sale_price", str(item.get("price", item.get("cost", 0))))
@@ -863,6 +925,8 @@ class InventoryFrame(tk.Frame):
         bc_entry.pack(side=tk.LEFT, ipady=6, expand=True, fill=tk.X, padx=(0, 4))
         bc_entry.insert(0, item.get("barcode", ""))
         entries["barcode"] = bc_entry
+        bc_entry.bind("<FocusOut>", lambda event: _maybe_autofill_gst_rate(event))
+        _maybe_autofill_gst_rate(force=not gst_manual_override)
 
         def _generate_barcode():
             nm = entries["name"].get().strip() if "name" in entries else name
@@ -890,16 +954,16 @@ class InventoryFrame(tk.Frame):
         def _save():
             _maybe_autofill_gst_rate(force=False)
             raw_payload = {
-                "name": entries["name"].get().strip(),
-                "category": entries["category"].get().strip(),
+                "name": smart_title_name(entries["name"].get()),
+                "category": smart_title_name(entries["category"].get()),
                 "brand": entries["brand"].get().strip(),
-                "base_product": entries["base_product"].get().strip(),
+                "base_product": smart_title_name(entries["base_product"].get()),
                 "pack_size": entries["pack_size"].get().strip(),
-                "qty": entries["qty"].get().strip(),
+                "qty": str(item.get("qty", 0)) if edit else entries["qty"].get().strip(),
                 "unit": entries["unit"].get().strip() or "pcs",
                 "sale_unit": entries["sale_unit"].get().strip() or entries["unit"].get().strip() or "pcs",
                 "base_unit": entries["base_unit"].get().strip() if "base_unit" in entries else entries["unit"].get().strip(),
-                "bill_label": entries["bill_label"].get().strip(),
+                "bill_label": smart_title_name(entries["bill_label"].get()),
                 "barcode": entries.get("barcode", bc_entry).get().strip(),
                 "sku": entries["sku"].get().strip(),
                 "min_stock": entries["min_stock"].get().strip(),
@@ -937,6 +1001,7 @@ class InventoryFrame(tk.Frame):
                     return
             nm = raw_payload["name"]
             cat = form_payload.inventory_item["category"]
+            ensure_catalog_category("Products", cat)
             brand = form_payload.inventory_item["brand"]
             base_product = form_payload.inventory_item["base_product"]
             bill_label = form_payload.inventory_item["bill_label"]
@@ -998,6 +1063,11 @@ class InventoryFrame(tk.Frame):
                 if qty <= mins:
                     messagebox.showwarning("Low Stock",
                                             f"'{nm}' is low!\n{_format_stock_qty(qty)} {unit} remaining.")
+                if callable(on_saved):
+                    try:
+                        on_saved(nm)
+                    except Exception as e:
+                        app_log(f"[_item_form on_saved] {e}")
 
             self.after(10, _post_save_refresh)
 
@@ -1023,15 +1093,15 @@ class InventoryFrame(tk.Frame):
         reveal_when_ready(win)
 
     def _import_products(self):
-        """Import all products from services_db.json into inventory."""
+        """Import all products from the current product catalog into inventory."""
         try:
             from utils import load_json, F_SERVICES
             data = load_json(F_SERVICES, {})
             products = data.get("Products", {})
             if not products:
                 messagebox.showwarning("No Products",
-                                        "No products found in services database.\n"
-                                        "Add products via Admin Panel first.")
+                                        "No products found in the current product catalog.\n"
+                                        "Add or import products first.")
                 return
             inv = get_inventory()
             added = 0
@@ -1084,6 +1154,24 @@ class InventoryFrame(tk.Frame):
         except Exception as e:
             messagebox.showerror("Import Error", f"Could not import: {e}")
 
+    def _open_admin_products(self):
+        try:
+            if hasattr(self.app, "_open_admin"):
+                self.app._open_admin("products")
+                return
+            messagebox.showerror("Error", "Admin panel is not available from this view.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open admin products: {e}")
+
+    def _open_admin_services(self):
+        try:
+            if hasattr(self.app, "_open_admin"):
+                self.app._open_admin("services")
+                return
+            messagebox.showerror("Error", "Admin panel is not available from this view.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open admin services: {e}")
+
     def _purchase_dialog(self):
         if self._rbac_denied():
             return
@@ -1116,19 +1204,23 @@ class InventoryFrame(tk.Frame):
         try:
             win.minsize(760, 640)
             win.resizable(True, True)
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[_purchase_bill_dialog] window resize setup failed: {e}")
 
         def _close(event=None):
             try:
-                if win.grab_current() == win:
-                    win.grab_release()
+                _hide_item_results()
             except Exception:
                 pass
             try:
+                if win.grab_current() == win:
+                    win.grab_release()
+            except Exception as e:
+                app_log(f"[_purchase_bill_dialog._close] grab_release failed: {e}")
+            try:
                 win.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_purchase_bill_dialog._close] destroy failed: {e}")
 
         header = tk.Frame(win, bg=C["card"], padx=18, pady=12)
         header.pack(fill=tk.X)
@@ -1146,6 +1238,12 @@ class InventoryFrame(tk.Frame):
 
         def _scroll_purchase_form(event):
             try:
+                try:
+                    _hide_item_results()
+                except Exception:
+                    pass
+                if _is_dropdown_wheel_target(getattr(event, "widget", None)):
+                    return None
                 step = -1 if int(getattr(event, "delta", 0) or 0) > 0 else 1
                 _canvas.yview_scroll(step, "units")
                 return "break"
@@ -1155,8 +1253,8 @@ class InventoryFrame(tk.Frame):
         def _bind_purchase_scroll(widget):
             try:
                 widget.bind("<MouseWheel>", _scroll_purchase_form, add="+")
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_bind_purchase_scroll] bind failed: {e}")
 
         columns = tk.Frame(body, bg=C["bg"])
         columns.pack(fill=tk.X)
@@ -1196,13 +1294,398 @@ class InventoryFrame(tk.Frame):
         _entry(left, "invoice_no", "Purchase Invoice No:")
         _entry(left, "invoice_date", "Date:", today_str())
 
-        _label(right, "Item:")
+        item_names = _purchase_item_names(inv)
+        if selected_name and selected_name not in item_names:
+            selected_name = ""
+        selected_category = str((inv.get(selected_name, {}) if selected_name else {}).get("category", "") or "").strip()
+        extra_purchase_categories = set(list_catalog_categories("Products"))
+        item_categories = purchase_item_categories(inv, item_names, extra_purchase_categories)
+        if selected_category not in item_categories:
+            selected_category = "All"
+        item_category_var = tk.StringVar(value=selected_category or "All")
+
+        cat_label_row = tk.Frame(right, bg=C["bg"])
+        cat_label_row.pack(fill=tk.X, pady=(8, 2))
+        tk.Label(cat_label_row, text="Category:", bg=C["bg"], fg=C["muted"],
+                 font=("Arial", 11)).pack(side=tk.LEFT)
+        ModernButton(cat_label_row, text="+ Category",
+                     command=lambda: _add_purchase_category(),
+                     color=C["blue"], hover_color=C["teal"],
+                     width=116, height=28, radius=6,
+                     font=("Arial", 9, "bold")).pack(side=tk.RIGHT)
+        item_category_cb = ttk.Combobox(
+            right,
+            textvariable=item_category_var,
+            values=item_categories,
+            state="readonly",
+            font=("Arial", 11),
+            width=30,
+        )
+        item_category_cb.pack(fill=tk.X, ipady=3)
+        item_category_cb.bind("<MouseWheel>", lambda _e: "break")
+
+        item_label_row = tk.Frame(right, bg=C["bg"])
+        item_label_row.pack(fill=tk.X, pady=(10, 2))
+        tk.Label(item_label_row, text="Item:", bg=C["bg"], fg=C["muted"],
+                 font=("Arial", 11)).pack(side=tk.LEFT)
+        ModernButton(item_label_row, text="+ New Product",
+                     command=lambda: _open_purchase_new_product(),
+                     color=C["blue"], hover_color=C["teal"],
+                     width=132, height=28, radius=6,
+                     font=("Arial", 9, "bold")).pack(side=tk.RIGHT)
         item_var = tk.StringVar(value=selected_name)
-        item_cb = ttk.Combobox(right, textvariable=item_var, font=("Arial", 11), width=30)
-        item_cb.pack(fill=tk.X, ipady=3)
+        item_search_row = tk.Frame(
+            right,
+            bg=C["input"],
+            highlightthickness=1,
+            highlightbackground=C["blue"],
+            highlightcolor=C["teal"],
+        )
+        item_search_row.pack(fill=tk.X, ipady=1)
+        item_cb = tk.Entry(
+            item_search_row,
+            textvariable=item_var,
+            font=("Arial", 11),
+            bg=C["input"],
+            fg=C["text"],
+            bd=0,
+            insertbackground=C["accent"],
+            relief=tk.FLAT,
+        )
+        item_cb.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5, padx=(6, 0))
         _bind_purchase_scroll(item_cb)
-        make_searchable_combobox(item_cb, sorted(inv))
         fields["item_name"] = item_cb
+        item_count_var = tk.StringVar(value=f"{len(item_names)} products available")
+        tk.Label(right, textvariable=item_count_var, bg=C["bg"], fg=C["muted"],
+                 font=("Arial", 9)).pack(anchor="w", pady=(2, 0))
+
+        item_popup = tk.Toplevel(win)
+        item_popup.withdraw()
+        item_popup.overrideredirect(True)
+        item_popup.configure(bg=C["blue"])
+        try:
+            item_popup.transient(win)
+        except Exception:
+            pass
+        item_list_wrap = tk.Frame(item_popup, bg=C["card"], padx=1, pady=1)
+        item_list_wrap.pack(fill=tk.BOTH, expand=True)
+        item_list = tk.Listbox(
+            item_list_wrap,
+            height=6,
+            bg=C["input"],
+            fg=C["text"],
+            selectbackground=C["teal"],
+            selectforeground="#ffffff",
+            activestyle="none",
+            exportselection=False,
+            font=("Arial", 10),
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=C["blue"],
+        )
+        item_list.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        item_list_scroll = ttk.Scrollbar(item_list_wrap, orient="vertical", command=item_list.yview)
+        item_list.configure(yscrollcommand=item_list_scroll.set)
+        item_list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        item_results_open = False
+
+        def _item_category(name: str) -> str:
+            return str((inv.get(name, {}) or {}).get("category", "") or "").strip()
+
+        def _category_filtered_item_names() -> list[str]:
+            category = item_category_var.get().strip()
+            return filter_purchase_items(
+                item_names,
+                "",
+                category=category,
+                item_category=_item_category,
+                limit=max(1, len(item_names)),
+            )
+
+        def _matching_purchase_items(query: str) -> list[str]:
+            return filter_purchase_items(
+                item_names,
+                query,
+                category=item_category_var.get(),
+                item_category=_item_category,
+                limit=60,
+            )
+
+        def _show_item_results():
+            nonlocal item_results_open
+            try:
+                if item_list.size() <= 0:
+                    _hide_item_results()
+                    return
+                item_results_open = True
+                item_search_row.update_idletasks()
+                width = max(260, item_search_row.winfo_width())
+                row_height = 22
+                visible_rows = min(8, max(1, item_list.size()))
+                height = (visible_rows * row_height) + 8
+                x = item_search_row.winfo_rootx()
+                y = item_search_row.winfo_rooty() + item_search_row.winfo_height() + 2
+                screen_h = item_search_row.winfo_screenheight()
+                if y + height > screen_h - 20:
+                    y = max(20, item_search_row.winfo_rooty() - height - 2)
+                item_popup.geometry(f"{width}x{height}+{x}+{y}")
+                item_popup.deiconify()
+                item_popup.lift(win)
+            except Exception as e:
+                app_log(f"[_purchase_dialog._show_item_results] {e}")
+
+        def _hide_item_results():
+            nonlocal item_results_open
+            item_results_open = False
+            try:
+                item_popup.withdraw()
+            except Exception as e:
+                app_log(f"[_purchase_dialog._hide_item_results] {e}")
+
+        def _refresh_item_list(event=None, *, show=True):
+            matches = _matching_purchase_items(item_var.get())
+            try:
+                item_list.delete(0, tk.END)
+                for name in matches:
+                    item_list.insert(tk.END, name)
+                filtered_total = len(_category_filtered_item_names())
+                count_text = f"{filtered_total} product(s) in category | {len(item_names)} total"
+                if item_var.get().strip():
+                    count_text = f"{len(matches)} match(es) | {filtered_total} in category"
+                item_count_var.set(count_text)
+                if show:
+                    _show_item_results()
+                else:
+                    _hide_item_results()
+            except Exception as e:
+                app_log(f"[_purchase_dialog._refresh_item_list] {e}")
+
+        def _select_purchase_item(name: str, event=None):
+            text = str(name or "").strip()
+            if not text:
+                return None
+            try:
+                item_var.set(text)
+                item_cb.icursor(tk.END)
+                _hide_item_results()
+                _fill_item()
+                return "break" if event is not None else None
+            except Exception as e:
+                app_log(f"[_purchase_dialog._select_purchase_item] {e}")
+                return None
+
+        def _select_item_from_list(event=None):
+            try:
+                selection = item_list.curselection()
+                if not selection:
+                    return None
+                return _select_purchase_item(item_list.get(selection[0]), event)
+            except Exception as e:
+                app_log(f"[_purchase_dialog._select_item_from_list] {e}")
+                return None
+
+        def _on_item_category_change(event=None):
+            item_var.set("")
+            _refresh_item_list(show=True)
+            try:
+                item_cb.focus_set()
+            except Exception:
+                pass
+
+        def _sync_purchase_category_values():
+            nonlocal item_categories
+            item_categories = purchase_item_categories(inv, item_names, extra_purchase_categories)
+            try:
+                item_category_cb["values"] = item_categories
+                if item_category_var.get().strip() not in item_categories:
+                    item_category_var.set("All")
+            except Exception as e:
+                app_log(f"[_purchase_dialog._sync_purchase_category_values] {e}")
+
+        def _reload_purchase_items(selected_item=""):
+            nonlocal inv, item_names
+            try:
+                inv = get_inventory()
+                item_names = _purchase_item_names(inv)
+                _sync_purchase_category_values()
+                selected = str(selected_item or "").strip()
+                if selected and selected in item_names:
+                    item_var.set(selected)
+                    category = _item_category(selected)
+                    if category:
+                        extra_purchase_categories.add(category)
+                    _sync_purchase_category_values()
+                    if category in item_categories:
+                        item_category_var.set(category)
+                    _hide_item_results()
+                    _fill_item()
+                else:
+                    _refresh_item_list(show=False)
+            except Exception as e:
+                app_log(f"[_purchase_dialog._reload_purchase_items] {e}")
+
+        def _add_purchase_category():
+            cat_win = tk.Toplevel(win)
+            hide_while_building(cat_win)
+            cat_win.title("Add Category")
+            popup_window(cat_win, 420, 180)
+            cat_win.configure(bg=C["bg"])
+            try:
+                cat_win.transient(win)
+                cat_win.grab_set()
+            except Exception as e:
+                app_log(f"[_add_purchase_category] grab failed: {e}")
+
+            box = tk.Frame(cat_win, bg=C["bg"], padx=18, pady=16)
+            box.pack(fill=tk.BOTH, expand=True)
+            tk.Label(box, text="New Category", bg=C["bg"], fg=C["text"],
+                     font=("Arial", 12, "bold")).pack(anchor="w")
+            category_entry = tk.Entry(box, font=("Arial", 11), bg=C["input"], fg=C["text"],
+                                      bd=0, insertbackground=C["accent"])
+            category_entry.pack(fill=tk.X, ipady=6, pady=(10, 12))
+
+            def _close_category(event=None):
+                try:
+                    if cat_win.grab_current() == cat_win:
+                        cat_win.grab_release()
+                except Exception as e:
+                    app_log(f"[_add_purchase_category._close] grab_release failed: {e}")
+                try:
+                    cat_win.destroy()
+                except Exception as e:
+                    app_log(f"[_add_purchase_category._close] destroy failed: {e}")
+                return "break" if event is not None else None
+
+            def _save_category(event=None):
+                category = normalize_category_name(category_entry.get())
+                if not category:
+                    messagebox.showerror("Invalid Category", "Category name is required.", parent=cat_win)
+                    return "break"
+                if category_exists(category, item_categories):
+                    messagebox.showerror("Duplicate Category", "This category already exists.", parent=cat_win)
+                    return "break"
+                saved_category = ensure_catalog_category("Products", category)
+                extra_purchase_categories.add(saved_category)
+                category = saved_category
+                item_category_var.set(category)
+                _sync_purchase_category_values()
+                item_var.set("")
+                _refresh_item_list(show=True)
+                _close_category()
+                try:
+                    item_cb.focus_set()
+                except Exception:
+                    pass
+                return "break"
+
+            btns = tk.Frame(box, bg=C["bg"])
+            btns.pack(fill=tk.X)
+            ModernButton(btns, text="Add Category",
+                         command=_save_category,
+                         color=C["teal"], hover_color=C["blue"],
+                         width=150, height=34, radius=6,
+                         font=("Arial", 10, "bold")).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            ModernButton(btns, text="Cancel",
+                         command=_close_category,
+                         color=C["sidebar"], hover_color=C["blue"],
+                         width=100, height=34, radius=6,
+                         font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=(10, 0))
+            cat_win.bind("<Return>", _save_category)
+            cat_win.bind("<Escape>", _close_category)
+            cat_win.after(0, category_entry.focus_set)
+            reveal_when_ready(cat_win)
+
+        def _open_purchase_new_product():
+            category = item_category_var.get().strip()
+            if category == "All":
+                category = ""
+
+            def _on_product_saved(saved_name):
+                _reload_purchase_items(saved_name)
+
+            self._item_form(
+                "Add Product",
+                initial_category=category,
+                on_saved=_on_product_saved,
+            )
+
+        def _select_first_item(event=None):
+            try:
+                matches = _matching_purchase_items(item_var.get())
+                if not matches:
+                    return "break"
+                exact = next(
+                    (name for name in matches if name.lower() == item_var.get().strip().lower()),
+                    matches[0],
+                )
+                return _select_purchase_item(exact, event)
+            except Exception as e:
+                app_log(f"[_purchase_dialog._select_first_item] {e}")
+                return "break"
+
+        def _move_item_selection(step: int):
+            try:
+                size = item_list.size()
+                if size <= 0:
+                    return "break"
+                selected = item_list.curselection()
+                index = selected[0] + step if selected else 0
+                index = max(0, min(size - 1, index))
+                item_list.selection_clear(0, tk.END)
+                item_list.selection_set(index)
+                item_list.activate(index)
+                item_list.see(index)
+                return "break"
+            except Exception:
+                return "break"
+
+        def _toggle_item_results():
+            if item_results_open:
+                _hide_item_results()
+            else:
+                item_cb.focus_set()
+                _refresh_item_list(show=True)
+
+        def _scroll_item_list(event):
+            try:
+                delta = int(getattr(event, "delta", 0) or 0)
+                step = -1 if delta > 0 else 1
+                item_list.yview_scroll(step, "units")
+                return "break"
+            except Exception:
+                return None
+
+        item_arrow_btn = tk.Button(
+            item_search_row,
+            text="v",
+            command=_toggle_item_results,
+            bg=C["input"],
+            fg=C["muted"],
+            activebackground=C["teal"],
+            activeforeground="#ffffff",
+            bd=0,
+            padx=8,
+            pady=0,
+            cursor="hand2",
+            relief=tk.FLAT,
+            font=("Arial", 9, "bold"),
+        )
+        item_arrow_btn.pack(side=tk.RIGHT, fill=tk.Y)
+
+        item_category_cb.bind("<<ComboboxSelected>>", _on_item_category_change)
+        item_cb.bind("<KeyRelease>", _refresh_item_list, add="+")
+        item_cb.bind("<FocusIn>", _refresh_item_list, add="+")
+        item_cb.bind("<Return>", _select_first_item, add="+")
+        item_cb.bind("<Down>", lambda _e: _move_item_selection(1), add="+")
+        item_cb.bind("<Up>", lambda _e: _move_item_selection(-1), add="+")
+        item_cb.bind("<Escape>", lambda _e: (_hide_item_results(), "break")[-1], add="+")
+        item_list.bind("<ButtonRelease-1>", _select_item_from_list, add="+")
+        item_list.bind("<Double-Button-1>", _select_item_from_list, add="+")
+        item_list.bind("<Return>", _select_item_from_list, add="+")
+        item_list.bind("<MouseWheel>", _scroll_item_list, add="+")
+        _refresh_item_list(show=False)
+        if selected_name:
+            _hide_item_results()
 
         qty_entry = _entry(right, "qty", "Qty:", "1")
         _label(right, "Unit:")
@@ -1227,6 +1710,34 @@ class InventoryFrame(tk.Frame):
         notes.pack(fill=tk.X, padx=18, pady=(2, 10))
         _bind_purchase_scroll(notes)
 
+        purchase_lines = []
+        lines_panel = tk.Frame(body, bg=C["card"], padx=12, pady=10)
+        lines_panel.pack(fill=tk.X, padx=0, pady=(8, 10))
+        lines_head = tk.Frame(lines_panel, bg=C["card"])
+        lines_head.pack(fill=tk.X)
+        tk.Label(lines_head, text="Purchase Items",
+                 bg=C["card"], fg=C["text"],
+                 font=("Arial", 12, "bold")).pack(side=tk.LEFT)
+        lines_total_var = tk.StringVar(value="0 item(s) | Net Rs0.00")
+        tk.Label(lines_head, textvariable=lines_total_var,
+                 bg=C["card"], fg=C["muted"],
+                 font=("Arial", 10, "bold")).pack(side=tk.RIGHT)
+
+        line_btns = tk.Frame(lines_panel, bg=C["card"])
+        line_btns.pack(fill=tk.X, pady=(8, 8))
+        line_tree_wrap = tk.Frame(lines_panel, bg=C["card"])
+        line_tree_wrap.pack(fill=tk.X)
+        line_cols = ("Item", "Qty", "Unit", "Cost", "GST", "Line Net")
+        line_tree = ttk.Treeview(line_tree_wrap, columns=line_cols, show="headings", height=5)
+        for col in line_cols:
+            line_tree.heading(col, text=col)
+            line_tree.column(col, width=105, minwidth=55)
+        line_tree.column("Item", width=240, minwidth=140)
+        line_tree.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        line_scroll = ttk.Scrollbar(line_tree_wrap, orient="vertical", command=line_tree.yview)
+        line_tree.configure(yscrollcommand=line_scroll.set)
+        line_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
         def _set_entry(key, value):
             widget = fields.get(key)
             if not widget:
@@ -1234,8 +1745,8 @@ class InventoryFrame(tk.Frame):
             try:
                 widget.delete(0, tk.END)
                 widget.insert(0, str(value or ""))
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_set_entry] failed for key {key}: {e}")
 
         def _fill_vendor(event=None):
             vendor = vendor_by_name.get(vendor_var.get().strip())
@@ -1258,8 +1769,8 @@ class InventoryFrame(tk.Frame):
             try:
                 qty_entry.focus_set()
                 qty_entry.selection_range(0, tk.END)
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_fill_item] qty focus failed: {e}")
 
         vendor_cb.bind("<<ComboboxSelected>>", _fill_vendor)
         item_cb.bind("<<ComboboxSelected>>", _fill_item)
@@ -1267,13 +1778,99 @@ class InventoryFrame(tk.Frame):
         if selected_name:
             _fill_item()
 
+        def _purchase_line_from_fields():
+            return {
+                "item_name": item_var.get().strip(),
+                "qty": fields["qty"].get(),
+                "unit": unit_var.get(),
+                "cost_price": fields["cost_price"].get(),
+                "sale_price": fields["sale_price"].get(),
+                "mrp": fields["mrp"].get(),
+                "gst_rate": fields["gst_rate"].get(),
+                "hsn_sac": fields["hsn_sac"].get(),
+                "batch_no": fields["batch_no"].get(),
+                "expiry_date": fields["expiry_date"].get(),
+            }
+
+        def _line_net(item):
+            try:
+                qty = float(item.get("qty", 0) or 0)
+                cost = float(item.get("cost_price", 0) or 0)
+                gst = float(item.get("gst_rate", 0) or 0)
+                gross = qty * cost
+                return gross + (gross * gst / 100)
+            except Exception:
+                return 0.0
+
+        def _refresh_purchase_lines():
+            try:
+                for row_id in line_tree.get_children():
+                    line_tree.delete(row_id)
+                total = 0.0
+                for idx, line in enumerate(purchase_lines, start=1):
+                    net = _line_net(line)
+                    total += net
+                    line_tree.insert("", tk.END, iid=str(idx - 1), values=(
+                        line.get("item_name", ""),
+                        line.get("qty", ""),
+                        line.get("unit", ""),
+                        line.get("cost_price", ""),
+                        line.get("gst_rate", ""),
+                        fmt_currency(net),
+                    ))
+                lines_total_var.set(f"{len(purchase_lines)} item(s) | Net {fmt_currency(total)}")
+            except Exception as e:
+                app_log(f"[_refresh_purchase_lines] {e}")
+
+        def _add_purchase_line():
+            line = _purchase_line_from_fields()
+            if not line["item_name"]:
+                messagebox.showwarning("Add Item", "Select an item before adding a line.")
+                return
+            try:
+                qty = float(line.get("qty", 0) or 0)
+                if qty <= 0:
+                    raise ValueError
+            except Exception:
+                messagebox.showwarning("Add Item", "Qty must be greater than zero.")
+                return
+            purchase_lines.append(line)
+            _refresh_purchase_lines()
+            try:
+                item_cb.focus_set()
+                item_cb.selection_range(0, tk.END)
+            except Exception:
+                pass
+
+        def _remove_purchase_line():
+            selected = line_tree.selection()
+            if not selected:
+                return
+            indexes = sorted((int(row_id) for row_id in selected), reverse=True)
+            for index in indexes:
+                if 0 <= index < len(purchase_lines):
+                    purchase_lines.pop(index)
+            _refresh_purchase_lines()
+
+        ModernButton(line_btns, text="Add Line",
+                     command=_add_purchase_line,
+                     color=C["blue"], hover_color=C["teal"],
+                     width=120, height=32, radius=8,
+                     font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=(0, 8))
+        ModernButton(line_btns, text="Remove Selected",
+                     command=_remove_purchase_line,
+                     color=C["red"], hover_color="#c0392b",
+                     width=150, height=32, radius=8,
+                     font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+
         def _save_purchase():
             item_name = item_var.get().strip()
             vendor_name = vendor_var.get().strip()
             if not vendor_name:
                 messagebox.showerror("Invalid Purchase", "Vendor name is required.")
                 return
-            if not item_name:
+            items_to_save = purchase_lines[:] or [_purchase_line_from_fields()]
+            if not any(str(item.get("item_name", "")).strip() for item in items_to_save):
                 messagebox.showerror("Invalid Purchase", "Item is required.")
                 return
             raw = {
@@ -1284,16 +1881,7 @@ class InventoryFrame(tk.Frame):
                 "vendor_address": fields["vendor_address"].get(),
                 "invoice_no": fields["invoice_no"].get(),
                 "invoice_date": fields["invoice_date"].get(),
-                "item_name": item_name,
-                "qty": fields["qty"].get(),
-                "unit": unit_var.get(),
-                "cost_price": fields["cost_price"].get(),
-                "sale_price": fields["sale_price"].get(),
-                "mrp": fields["mrp"].get(),
-                "gst_rate": fields["gst_rate"].get(),
-                "hsn_sac": fields["hsn_sac"].get(),
-                "batch_no": fields["batch_no"].get(),
-                "expiry_date": fields["expiry_date"].get(),
+                "items": items_to_save,
                 "notes": notes.get("1.0", tk.END),
             }
             try:
@@ -1303,10 +1891,10 @@ class InventoryFrame(tk.Frame):
                 return
             _close()
             self._load()
-            self._select_inventory_item(item_name)
+            self._select_inventory_item(str(items_to_save[0].get("item_name", "")))
             messagebox.showinfo(
                 "Purchase Saved",
-                "Purchase bill saved.\n\n"
+                f"Purchase bill saved with {len(items_to_save)} item(s).\n\n"
                 f"Gross: {fmt_currency(result.get('gross_total', 0))}\n"
                 f"GST: {fmt_currency(result.get('tax_total', 0))}\n"
                 f"Net: {fmt_currency(result.get('net_total', 0))}",
@@ -1386,8 +1974,8 @@ class InventoryFrame(tk.Frame):
                     self.tree.focus(item_id)
                     self.tree.see(item_id)
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[_select_inventory_item] selection failed: {e}")
 
     def _show_inventory_context_menu(self, event):
         row_id = self.tree.identify_row(event.y)
@@ -1443,7 +2031,8 @@ class InventoryFrame(tk.Frame):
         from shared.context_menu_definitions.inventory_context_menu import InventoryContextAction
 
         action_adapter.register(InventoryContextAction.EDIT, lambda _ctx, _act: self._edit_dialog())
-        action_adapter.register(InventoryContextAction.ADD_STOCK, lambda ctx, _act: self._prefill_quick_stock(ctx))
+        action_adapter.register(InventoryContextAction.ADD_STOCK, lambda ctx, _act: self._show_add_stock_dialog(ctx.selected_row.get("item_name", "")))
+        action_adapter.register(InventoryContextAction.REDUCE_STOCK, lambda ctx, _act: self._show_reduce_stock_dialog(ctx.selected_row.get("item_name", "")))
         action_adapter.register(
             InventoryContextAction.COPY_ITEM_NAME,
             lambda ctx, _act: clipboard_service.copy_text(self, ctx.selected_row.get("item_name", "")),
@@ -1471,15 +2060,196 @@ class InventoryFrame(tk.Frame):
         try:
             self.q_qty.focus_set()
             self.q_qty.selection_range(0, tk.END)
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[_prefill_quick_stock] qty focus failed: {e}")
+
+    def _show_add_stock_dialog(self, item_name: str):
+        if not item_name:
+            return
+        inv = get_inventory()
+        item = inv.get(item_name)
+        if not item:
+            messagebox.showerror("Error", f"Item '{item_name}' not found.")
+            return
+
+        win = tk.Toplevel(self)
+        hide_while_building(win)
+        win.title(f"Add Stock: {item_name}")
+        popup_window(win, 500, 360)
+        win.configure(bg=C["bg"])
+        try:
+            win.attributes("-topmost", True)
+            win.grab_set()
+        except Exception as e:
+            app_log(f"[_show_add_stock_dialog] window topmost/grab failed: {e}")
+
+        main_frame = tk.Frame(win, bg=C["bg"], padx=20, pady=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        tk.Label(
+            main_frame,
+            text=f"Current Stock: {_format_stock_qty(item.get('qty', 0))} {item.get('unit', 'pcs')}",
+            bg=C["bg"], fg=C["text"], font=("Arial", 11, "bold"),
+        ).pack(anchor="w", pady=(0, 15))
+
+        tk.Label(main_frame, text="Quantity to Add:", bg=C["bg"], fg=C["muted"], font=("Arial", 10)).pack(anchor="w")
+        qty_entry = tk.Entry(main_frame, font=("Arial", 12), bg=C["input"], fg=C["text"], insertbackground=C["accent"])
+        qty_entry.pack(fill=tk.X, pady=(5, 15), ipady=4)
+
+        tk.Label(main_frame, text="Note (optional):", bg=C["bg"], fg=C["muted"], font=("Arial", 10)).pack(anchor="w")
+        note_entry = tk.Entry(main_frame, font=("Arial", 11), bg=C["input"], fg=C["text"], insertbackground=C["accent"])
+        note_entry.pack(fill=tk.X, pady=(5, 18), ipady=4)
+
+        def _close():
+            try:
+                if win.grab_current() == win:
+                    win.grab_release()
+            except Exception as e:
+                app_log(f"[_show_add_stock_dialog._close] grab_release failed: {e}")
+            try:
+                win.destroy()
+            except Exception as e:
+                app_log(f"[_show_add_stock_dialog._close] destroy failed: {e}")
+
+        def _on_save():
+            qty_raw = qty_entry.get().strip()
+            try:
+                qty_val = parse_qty_expression(qty_raw)
+            except ValueError as e:
+                messagebox.showerror("Invalid Quantity", str(e), parent=win)
+                return
+            if qty_val <= 0:
+                messagebox.showerror("Invalid Quantity", "Add quantity must be greater than 0.", parent=win)
+                return
+            try:
+                current_qty = safe_float(item.get("qty", 0), 0.0)
+                new_qty = current_qty + qty_val
+                item["qty"] = new_qty
+                item["updated"] = today_str()
+                try:
+                    InventoryService().update_quantity(item_name, new_qty)
+                except Exception as fast_exc:
+                    app_log(f"[inventory add stock fast path] {fast_exc}")
+                    save_inventory(inv)
+                self._load()
+                self._select_inventory_item(item_name)
+                _close()
+                messagebox.showinfo("Success", f"Added {qty_val:g} {item.get('unit', 'pcs')} to '{item_name}'.")
+            except Exception as e:
+                app_log(f"[_show_add_stock_dialog error] {e}")
+                messagebox.showerror("System Error", f"Could not add stock: {e}", parent=win)
+
+        btn_frame = tk.Frame(main_frame, bg=C["bg"])
+        btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        ModernButton(btn_frame, text="Add Stock", command=_on_save,
+                     color=C["teal"], hover_color=C["blue"],
+                     width=120, height=35, radius=6, font=("Arial", 10, "bold")).pack(side=tk.RIGHT)
+        ModernButton(btn_frame, text="Cancel", command=_close,
+                     color=C["sidebar"], hover_color=C["blue"],
+                     width=90, height=35, radius=6, font=("Arial", 10, "bold")).pack(side=tk.RIGHT, padx=(0, 10))
+        win.after(0, lambda: qty_entry.focus_set())
+        reveal_when_ready(win)
+
+    def _show_reduce_stock_dialog(self, item_name: str):
+        if not item_name:
+            return
+            
+        inv = get_inventory()
+        item = inv.get(item_name)
+        if not item:
+            messagebox.showerror("Error", f"Item '{item_name}' not found.")
+            return
+
+        win = tk.Toplevel(self)
+        hide_while_building(win)
+        win.title(f"Reduce Stock: {item_name}")
+        popup_window(win, 500, 360)
+        win.configure(bg=C["bg"])
+        try:
+            win.attributes("-topmost", True)
+            win.grab_set()
+        except Exception as e:
+            app_log(f"[_show_reduce_stock_dialog] window topmost/grab failed: {e}")
+            
+        main_frame = tk.Frame(win, bg=C["bg"], padx=20, pady=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        tk.Label(main_frame, text=f"Available Stock: {_format_stock_qty(item.get('qty', 0))} {item.get('unit', 'pcs')}", 
+                 bg=C["bg"], fg=C["text"], font=("Arial", 11, "bold")).pack(anchor="w", pady=(0, 15))
+
+        tk.Label(main_frame, text="Reduction Quantity:", bg=C["bg"], fg=C["muted"], font=("Arial", 10)).pack(anchor="w")
+        qty_entry = tk.Entry(main_frame, font=("Arial", 12), bg=C["input"], fg=C["text"], insertbackground=C["accent"])
+        qty_entry.pack(fill=tk.X, pady=(5, 15), ipady=4)
+        
+        tk.Label(main_frame, text="Reason for Reduction:", bg=C["bg"], fg=C["muted"], font=("Arial", 10)).pack(anchor="w")
+        reason_var = tk.StringVar()
+        from services_v5.inventory_service import InventoryService
+        reasons = list(InventoryService.VALID_REDUCTION_REASONS)
+        reason_cb = ttk.Combobox(main_frame, textvariable=reason_var, values=reasons, font=("Arial", 11))
+        reason_cb.pack(fill=tk.X, pady=(5, 20), ipady=4)
+        if reasons:
+            reason_cb.current(0)
+            
+        def _on_save():
+            qty_raw = qty_entry.get().strip()
+            reason = reason_var.get().strip()
+            
+            try:
+                from src.blite_v6.inventory_grocery.qty_parser import parse_qty_expression
+                qty_val = parse_qty_expression(qty_raw)
+            except ValueError as e:
+                messagebox.showerror("Invalid Quantity", str(e), parent=win)
+                return
+                
+            try:
+                current_user = self.app.current_user.get("name", "Unknown") if getattr(self, "app", None) else "Unknown"
+                InventoryService().reduce_stock(
+                    legacy_name=item_name, 
+                    qty=qty_val, 
+                    reason=reason,
+                    reduced_by=current_user
+                )
+                self._load()
+                self._select_inventory_item(item_name)
+                win.destroy()
+                messagebox.showinfo("Success", f"Stock reduced by {qty_val} for '{item_name}'.")
+            except ValueError as e:
+                messagebox.showerror("Error", str(e), parent=win)
+            except Exception as e:
+                app_log(f"[_show_reduce_stock_dialog error] {e}")
+                messagebox.showerror("System Error", f"Could not reduce stock: {e}", parent=win)
+                
+        def _on_cancel():
+            win.destroy()
+            
+        btn_frame = tk.Frame(main_frame, bg=C["bg"])
+        btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        ModernButton(btn_frame, text="Reduce Stock", command=_on_save, color=C["red"], hover_color="#c0392b", 
+                     width=120, height=35, radius=6, font=("Arial", 10, "bold")).pack(side=tk.RIGHT)
+        ModernButton(btn_frame, text="Cancel", command=_on_cancel, color=C["sidebar"], hover_color=C["blue"], 
+                     width=90, height=35, radius=6, font=("Arial", 10, "bold")).pack(side=tk.RIGHT, padx=(0, 10))
+                     
+        win.after(0, lambda: qty_entry.focus_set())
+        reveal_when_ready(win)
 
     def _quick_update(self):
         name = self.q_item.get().strip()
-        qty  = safe_float(self.q_qty.get(),0.0)
+        qty_raw = self.q_qty.get().strip()
         typ  = self.q_type.get()
+        if "Set" in typ and not self._can_stock_correct():
+            messagebox.showerror(
+                "Access Denied",
+                "Exact stock correction is restricted to Owner/Admin.\n\n"
+                "Use Add (Purchase) or Reduce Stock with reason instead.",
+            )
+            return
         if not name:
-            messagebox.showerror("Error","Select an item."); return
+            messagebox.showerror("Error", "Select an item."); return
+        try:
+            qty = parse_qty_expression(qty_raw)
+        except ValueError as e:
+            messagebox.showerror("Invalid Quantity", str(e))
+            return
         try:
             if hasattr(self, "_quick_update_btn"):
                 self._quick_update_btn.set_text("Updating...")
@@ -1491,10 +2261,10 @@ class InventoryFrame(tk.Frame):
             current_qty = safe_float(item.get("qty", 0), 0.0)
             if "Add" in typ:
                 new_qty = current_qty + qty
-            elif "Remove" in typ:
-                new_qty = max(0, current_qty - qty)
-            else:
+            elif "Set" in typ:
                 new_qty = qty
+            else:
+                new_qty = current_qty + qty
             item["qty"] = new_qty
             item["updated"] = today_str()
             try:
@@ -1545,20 +2315,20 @@ class InventoryFrame(tk.Frame):
         win.configure(bg=C["bg"])
         try:
             win.attributes("-topmost", False)
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[_show_deleted_products] window topmost failed: {e}")
 
         def _close(event=None):
             try:
                 if win.grab_current() == win:
                     win.grab_release()
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_show_deleted_products._close] grab_release failed: {e}")
             try:
                 if win.winfo_exists():
                     win.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[_show_deleted_products._close] destroy failed: {e}")
             return "break" if event is not None else None
         win.protocol("WM_DELETE_WINDOW", _close)
         win.bind("<Escape>", _close)
@@ -1635,8 +2405,8 @@ class InventoryFrame(tk.Frame):
             try:
                 from utils import build_item_codes
                 build_item_codes(force=True)
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[refresh_billing_item_cache] failed: {e}")
 
         def _restore():
             sel = tree.selection()
@@ -1710,7 +2480,7 @@ class InventoryFrame(tk.Frame):
         reveal_when_ready(win)
 
     def _import_from_products(self):
-        """Import all products from services_db.json into inventory."""
+        """Import all products from the current product catalog into inventory."""
         try:
             from utils import load_json, F_SERVICES
             from datetime import date
@@ -1718,7 +2488,7 @@ class InventoryFrame(tk.Frame):
             products = db.get("Products", {})
             if not products:
                 messagebox.showwarning("No Products",
-                                        "No products found in services_db.json")
+                                        "No products found in the current product catalog.")
                 return
             inv = get_inventory()
             added = updated = 0

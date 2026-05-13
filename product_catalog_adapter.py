@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from salon_settings import get_settings
+from services_v5.inventory_service import InventoryService
 from services_v5.product_catalog_service import ProductCatalogService
-from utils import F_SERVICES, build_item_codes, load_json
+from services_v5.service_master_service import ServiceMasterService
+from utils import build_item_codes
 
 
 _PRODUCT_SERVICE = ProductCatalogService()
+_SERVICE_MASTER = ServiceMasterService()
+_INVENTORY_SERVICE = InventoryService()
 
 
 def use_v5_product_variants_db() -> bool:
@@ -27,9 +31,13 @@ def refresh_product_catalog_cache() -> None:
 
 
 def get_billing_services_products_snapshot() -> tuple[dict, dict]:
-    data = load_json(F_SERVICES, {})
-    services = data.get("Services", {}) if ("Services" in data or "Products" in data) else data
-    legacy_products = data.get("Products", {}) if ("Services" in data or "Products" in data) else {}
+    services = _SERVICE_MASTER.list_grouped_services(active_only=True)
+    legacy_products = {}
+    for name, item in _INVENTORY_SERVICE.build_legacy_inventory_map().items():
+        category = str(item.get("category", "")).strip() or "General"
+        legacy_products.setdefault(category, {})[name] = float(
+            item.get("price", item.get("sale_price", item.get("cost", 0.0))) or 0.0
+        )
 
     if not use_v5_product_variants_db():
         return services, legacy_products

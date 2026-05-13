@@ -193,10 +193,11 @@ class PrintSettingsPanel(tk.Frame):
         panel.pack(fill=tk.BOTH, expand=True)
     """
 
-    def __init__(self, parent, **kwargs):
+    def __init__(self, parent, on_save=None, **kwargs):
         super().__init__(parent, bg=C["bg"], **kwargs)
         self._vars = {}
         self._ps   = get_print_settings()
+        self._on_save = on_save
         self._responsive = get_responsive_metrics(self.winfo_toplevel())
         self._build()
 
@@ -535,6 +536,8 @@ class PrintSettingsPanel(tk.Frame):
             self._ps = ps
             messagebox.showinfo("Saved", "\u2705 Print settings saved!")
             self._preview()
+            if callable(self._on_save):
+                self._on_save()
         else:
             messagebox.showerror("Error", "Could not save print settings.")
 

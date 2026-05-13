@@ -17,16 +17,16 @@ Do this once before building a real V6 release EXE.
    Recommended:
 
    ```bat
-   G:\chimmu\License_Admin_Secrets\v6_license_private_key.json
+   G:\chimmu\Bobys_Salon Billing\License_Admin_Secrets\v6_license_private_key.json
    ```
 
 2. Generate the private key and install the matching public key into the V6 client:
 
    ```bat
-   python licensing_admin\keygen.py --generate-keypair --install-public-key --private-key "G:\chimmu\License_Admin_Secrets\v6_license_private_key.json" --public-key-module licensing\public_key.py --overwrite
+   python licensing_admin\keygen.py --generate-keypair --install-public-key --private-key "G:\chimmu\Bobys_Salon Billing\License_Admin_Secrets\v6_license_private_key.json" --public-key-module licensing\public_key.py --overwrite
    ```
 
-3. Record the printed public fingerprint in your release notes.
+3. Record the printed public fingerprint in your release notes. Current release fingerprint: `84D2E830E37775067190D400`.
 
 4. Rebuild the V6 EXE after `licensing/public_key.py` is updated.
 
@@ -80,7 +80,7 @@ For advanced/admin-only use, the old command-line wrapper is still available:
 Use `Extend Trial` in the GUI. The days value must match the app's configured trial-extension days.
 
 ```bat
-python licensing_admin\keygen.py --type trial_extend --device-id "DEVICE_ID_FROM_APP" --install-id "INSTALL_ID_FROM_APP" --extend-days 10 --private-key "G:\chimmu\License_Admin_Secrets\v6_license_private_key.json"
+python licensing_admin\keygen.py --type trial_extend --device-id "DEVICE_ID_FROM_APP" --install-id "INSTALL_ID_FROM_APP" --extend-days 10 --private-key "G:\chimmu\Bobys_Salon Billing\License_Admin_Secrets\v6_license_private_key.json"
 ```
 
 ## Release Checklist

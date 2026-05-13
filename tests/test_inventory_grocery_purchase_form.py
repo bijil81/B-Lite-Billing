@@ -46,3 +46,19 @@ def test_purchase_form_payload_uses_existing_vendor_id_without_blank_overwrite_f
     assert payload["vendor"] == {"name": "Fresh Farms"}
     assert payload["items"][0]["item_name"] == "Test Tomato Loose"
     assert payload["items"][0]["qty"] == "2.5"
+
+
+def test_purchase_form_payload_accepts_multiple_items():
+    payload = build_purchase_invoice_payload({
+        "vendor_name": "Fresh Farms",
+        "invoice_no": "PF-2",
+        "invoice_date": "2026-04-30",
+        "items": [
+            {"item_name": "Tomato", "qty": "2", "unit": "kg", "cost_price": "30"},
+            {"item_name": "Onion", "qty": "5", "unit": "kg", "cost_price": "20"},
+        ],
+    })
+
+    assert len(payload["items"]) == 2
+    assert payload["items"][0]["item_name"] == "Tomato"
+    assert payload["items"][1]["item_name"] == "Onion"

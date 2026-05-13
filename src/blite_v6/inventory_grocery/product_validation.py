@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any, Mapping
 
 from .product_units import decimal_from_value, normalize_unit
+from .qty_parser import parse_qty_expression
 
 
 @dataclass(frozen=True)
@@ -79,11 +80,22 @@ def validate_product_payload(payload: Mapping[str, Any]) -> ProductValidationRes
     if not normalized["category"]:
         errors.append(ValidationIssue("category", "Category is required"))
 
-    for field in ("sale_price", "cost_price", "stock_qty", "reorder_level", "mrp"):
+    for field in ("sale_price", "cost_price", "reorder_level", "mrp"):
         try:
             normalized[field] = validate_non_negative_decimal(payload.get(field), field)
         except ValueError as exc:
             errors.append(ValidationIssue(field, str(exc)))
+
+    # stock_qty supports smart expressions e.g. "3.04724 + 9.250"
+    raw_qty = payload.get("stock_qty")
+    if raw_qty not in (None, ""):
+        try:
+            parsed_qty = parse_qty_expression(str(raw_qty))
+            normalized["stock_qty"] = Decimal(str(parsed_qty))
+        except ValueError as exc:
+            errors.append(ValidationIssue("stock_qty", str(exc)))
+    else:
+        normalized["stock_qty"] = Decimal("0")
 
     try:
         normalized["gst_rate"] = validate_gst_rate(payload.get("gst_rate"))

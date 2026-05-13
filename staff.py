@@ -1,16 +1,16 @@
 """
-staff.py – BOBY'S Salon : Staff management + commission tracking
+staff.py â€“ BOBY'S Salon : Staff management + commission tracking
 FIXES:
   - Bug 14: removed unused CSV read in _calc_commission (wasted I/O)
   - Bug 15: _mark_att() no longer sets out_time on Absent/Leave
-  - Fix R2a: _load_tree() try/except — crash prevention
-  - Fix R2b: _staff_form save block try/except — error shown to user
-  - Fix R2c: _toggle_active() try/except — error shown to user
-  - Fix R2d: _delete() try/except — error shown to user
-  - Fix R2e: _load_attendance() try/except — crash prevention
-  - Fix R2f: _mark_att() save block try/except — error shown to user
-  - Fix R2g: _clock_out() save block try/except — error shown to user
-  - Fix R2h: _calc_commission() try/except — crash prevention
+  - Fix R2a: _load_tree() try/except â€” crash prevention
+  - Fix R2b: _staff_form save block try/except â€” error shown to user
+  - Fix R2c: _toggle_active() try/except â€” error shown to user
+  - Fix R2d: _delete() try/except â€” error shown to user
+  - Fix R2e: _load_attendance() try/except â€” crash prevention
+  - Fix R2f: _mark_att() save block try/except â€” error shown to user
+  - Fix R2g: _clock_out() save block try/except â€” error shown to user
+  - Fix R2h: _calc_commission() try/except â€” crash prevention
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -26,7 +26,7 @@ from utils import (C, load_json, save_json, safe_float,
 import os
 from tkinter import filedialog
 from ui_theme import apply_treeview_column_alignment, ModernButton
-from ui_responsive import make_scrollable
+from ui_responsive import make_toplevel_scrollable_with_footer
 from src.blite_v6.app.window_lifecycle import hide_while_building, reveal_when_ready
 
 
@@ -91,13 +91,13 @@ class StaffFrame(tk.Frame):
         hdr.pack(fill=tk.X)
         left_f = tk.Frame(hdr, bg=C["card"])
         left_f.pack(side=tk.LEFT, padx=20)
-        tk.Label(left_f, text="👩‍💼  Staff Management",
+        tk.Label(left_f, text="ðŸ‘©â€ðŸ’¼  Staff Management",
                  font=("Arial", 15, "bold"),
                  bg=C["card"], fg=C["text"]).pack(anchor="w")
         tk.Label(left_f, text="Manage staff, attendance & commissions",
                  font=("Arial", 10),
                  bg=C["card"], fg=C["muted"]).pack(anchor="w")
-        ModernButton(hdr, text="➕  Add Staff",
+        ModernButton(hdr, text="âž•  Add Staff",
                      command=self._add_dialog,
                      color=C["teal"], hover_color=C["blue"],
                      width=130, height=34, radius=8,
@@ -135,11 +135,11 @@ class StaffFrame(tk.Frame):
             tk.Frame(card, bg=color, height=2).pack(fill=tk.X, pady=(8, 0))
             self._staff_summary_cards[key] = value_lbl
 
-        # —€—€ Tab row: notebook tabs LEFT + action buttons RIGHT —€—€
+        # â€”â‚¬â€”â‚¬ Tab row: notebook tabs LEFT + action buttons RIGHT â€”â‚¬â€”â‚¬
         tab_bar = tk.Frame(self, bg=C["bg"])
         tab_bar.pack(fill=tk.X, padx=15, pady=(6, 0))
 
-        # Action buttons — RIGHT side of tab bar
+        # Action buttons â€” RIGHT side of tab bar
         self._staff_btn_frame = tk.Frame(tab_bar, bg=C["bg"])
         self._staff_btn_frame.pack(side=tk.RIGHT)
         self._edit_btn = ModernButton(
@@ -160,10 +160,16 @@ class StaffFrame(tk.Frame):
             width=118, height=32, radius=8, font=("Arial", 10, "bold"),
         )
         self._delete_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._users_btn = ModernButton(
+            self._staff_btn_frame, text="User Mgmt", command=self._open_user_management,
+            color=C["purple"], hover_color="#6c3483",
+            width=124, height=32, radius=8, font=("Arial", 10, "bold"),
+        )
+        self._users_btn.pack(side=tk.LEFT, padx=(0, 4))
         if False:
-            ("✏️  Edit",          C["blue"],   "#154360",  self._edit_dialog),
-            ("🚫  Toggle Active", C["orange"], "#d35400",  self._toggle_active),
-            ("🗑️  Delete",        C["red"],    "#c0392b",  self._delete),
+            ("âœï¸  Edit",          C["blue"],   "#154360",  self._edit_dialog),
+            ("ðŸš«  Toggle Active", C["orange"], "#d35400",  self._toggle_active),
+            ("ðŸ—‘ï¸  Delete",        C["red"],    "#c0392b",  self._delete),
             pass
             ModernButton(self._staff_btn_frame, text=txt, command=cmd,
                          color=clr, hover_color=hclr,
@@ -178,11 +184,11 @@ class StaffFrame(tk.Frame):
         t2 = tk.Frame(nb, bg=C["bg"])
         t3 = tk.Frame(nb, bg=C["bg"])
 
-        nb.add(t1, text="👥  Staff List")
-        nb.add(t2, text="🕐  Attendance")
-        nb.add(t3, text="💰  Commission")
+        nb.add(t1, text="ðŸ‘¥  Staff List")
+        nb.add(t2, text="ðŸ•  Attendance")
+        nb.add(t3, text="ðŸ’°  Commission")
 
-        # Hide buttons when not on Staff List tab
+        # Hide buttons when not on Staff List tab.
         def _on_tab_change(e):
             idx = nb.index(nb.select())
             if idx == 0:
@@ -202,13 +208,13 @@ class StaffFrame(tk.Frame):
                              "Staff management is restricted for your role.")
         return True
 
-    # —€—€ Staff List —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+    # â€”â‚¬â€”â‚¬ Staff List â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
     def _build_staff_list(self, parent):
-        # —€—€ Split: left=tree+buttons, divider, right=stats —€—€
+        # â€”â‚¬â€”â‚¬ Split: left=tree+buttons, divider, right=stats â€”â‚¬â€”â‚¬
         split = tk.Frame(parent, bg=C["bg"])
         split.pack(fill=tk.BOTH, expand=True, padx=8, pady=(6, 6))
 
-        # Stats panel — RIGHT side, fixed width 220px default
+        # Stats panel â€” RIGHT side, fixed width 220px default
         try:
             _sw = split.winfo_screenwidth()
         except Exception:
@@ -219,12 +225,12 @@ class StaffFrame(tk.Frame):
         self._stats_panel.pack(side=tk.RIGHT, fill=tk.Y)
         self._stats_panel.pack_propagate(False)
 
-        # —€—€ Drag divider — between tree and stats —€—€—€—€—€—€—€—€—€
+        # â€”â‚¬â€”â‚¬ Drag divider â€” between tree and stats â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
         self._divider = tk.Frame(split, bg=C["sidebar"], width=6,
                                   cursor="sb_h_double_arrow")
         self._divider.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # AnimationEngine smooth_drag — debounced, visual feedback
+        # AnimationEngine smooth_drag â€” debounced, visual feedback
         try:
             _dsw = split.winfo_screenwidth()
         except Exception:
@@ -235,7 +241,7 @@ class StaffFrame(tk.Frame):
                          max_w=int(_dsw * 0.55),
                          debounce=1)
 
-        # Tree side — LEFT, fills remaining space —€—€—€—€—€—€—€—€—€—€
+        # Tree side â€” LEFT, fills remaining space â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
         tree_f = tk.Frame(split, bg=C["bg"])
         tree_f.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
@@ -270,7 +276,7 @@ class StaffFrame(tk.Frame):
                                             font=("Arial", 10))
         self._staff_result_label.pack(side=tk.LEFT, padx=(10, 0))
 
-        # —€—€ Treeview —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+        # â€”â‚¬â€”â‚¬ Treeview â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
         cols = ("Name", "Role", "Phone", "Commission %", "Active")
         self.tree = ttk.Treeview(tree_f, columns=cols,
                                  show="headings")
@@ -289,7 +295,7 @@ class StaffFrame(tk.Frame):
         # Header
         sp_hdr = tk.Frame(self._stats_panel, bg=C["sidebar"], padx=10, pady=8)
         sp_hdr.pack(fill=tk.X)
-        tk.Label(sp_hdr, text="📊  Staff Overview",
+        tk.Label(sp_hdr, text="ðŸ“Š  Staff Overview",
                  font=("Arial", 11, "bold"),
                  bg=C["sidebar"], fg=C["text"]).pack(anchor="w")
         tk.Frame(self._stats_panel, bg=C["teal"], height=2).pack(fill=tk.X)
@@ -362,23 +368,23 @@ class StaffFrame(tk.Frame):
 
             # Today's attendance
             today_att  = next((a for a in att_list if a.get("date") == td), None)
-            today_status = today_att.get("status", "—") if today_att else "—"
-            today_in     = today_att.get("in_time", "—") if today_att else "—"
-            today_out    = today_att.get("out_time", "—") if today_att else "—"
+            today_status = today_att.get("status", "â€”") if today_att else "â€”"
+            today_in     = today_att.get("in_time", "â€”") if today_att else "â€”"
+            today_out    = today_att.get("out_time", "â€”") if today_att else "â€”"
             today_att    = attendance_get_day_record(att_list, td)
             latest_sess  = None
             if today_att:
                 today_att = attendance_sync_legacy_fields(today_att)
                 latest_sess = attendance_latest_session(today_att)
-            today_status = today_att.get("status", "—") if today_att else "—"
+            today_status = today_att.get("status", "â€”") if today_att else "â€”"
             today_in     = (latest_sess.get("in_time", "") if latest_sess else
-                            (today_att.get("in_time", "—") if today_att else "—"))
+                            (today_att.get("in_time", "â€”") if today_att else "â€”"))
             today_out    = (latest_sess.get("out_time", "") if latest_sess else
-                            (today_att.get("out_time", "—") if today_att else "—"))
+                            (today_att.get("out_time", "â€”") if today_att else "â€”"))
             if not today_in:
-                today_in = "—"
+                today_in = "â€”"
             if not today_out:
-                today_out = "—"
+                today_out = "â€”"
 
             # Sales this month
             mo_sales = sum(
@@ -392,14 +398,14 @@ class StaffFrame(tk.Frame):
             # Status color
             status_colors = {
                 "Present": C["green"], "Absent": C["red"],
-                "Leave": C["orange"], "—": C["muted"]
+                "Leave": C["orange"], "â€”": C["muted"]
             }
 
-            # —€—€ Photo + Name + Role —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+            # â€”â‚¬â€”â‚¬ Photo + Name + Role â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
             name_f = tk.Frame(self._stats_body, bg=C["card"])
             name_f.pack(fill=tk.X, pady=(0, 8))
 
-            # Photo area (60Ã—60)
+            # Photo area (60Ãƒâ€”60)
             photo_path = s.get("photo_path", "")
             photo_shown = False
             if photo_path and os.path.exists(photo_path):
@@ -419,7 +425,7 @@ class StaffFrame(tk.Frame):
                     pass
 
             if not photo_shown:
-                # Avatar circle fallback — click to add photo
+                # Avatar circle fallback â€” click to add photo
                 avatar_f = tk.Frame(name_f, bg=C["teal"],
                                      width=60, height=60, cursor="hand2")
                 avatar_f.pack(side=tk.LEFT)
@@ -433,7 +439,7 @@ class StaffFrame(tk.Frame):
                     w.bind("<Button-1>",
                         lambda e, n=name: self._change_photo(n))
                 # Hint label
-                tk.Label(name_f, text="📷",
+                tk.Label(name_f, text="ðŸ“·",
                           font=("Arial", 9),
                           bg=C["card"], fg=C["muted"],
                           cursor="hand2").place(
@@ -451,7 +457,7 @@ class StaffFrame(tk.Frame):
                      font=("Arial", 10),
                      bg=C["card"], fg=C["muted"]).pack(anchor="w")
             # Add/change photo button
-            ModernButton(name_info, text="📷 Photo",
+            ModernButton(name_info, text="ðŸ“· Photo",
                          command=lambda n=name: self._change_photo(n),
                          color=C["sidebar"], hover_color=C["blue"],
                          width=80, height=24, radius=6,
@@ -460,7 +466,7 @@ class StaffFrame(tk.Frame):
 
             tk.Frame(self._stats_body, bg=C["sidebar"], height=1).pack(fill=tk.X, pady=6)
 
-            # —€—€ Today status —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+            # â€”â‚¬â€”â‚¬ Today status â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
             tk.Label(self._stats_body, text="Today",
                      font=("Arial", 10, "bold"),
                      bg=C["card"], fg=C["muted"]).pack(anchor="w")
@@ -478,7 +484,7 @@ class StaffFrame(tk.Frame):
                      text=f"  In: {today_in}",
                      font=("Arial", 10),
                      bg=C["card"], fg=C["muted"]).pack(side=tk.LEFT)
-            if today_out != "—":
+            if today_out != "â€”":
                 tk.Label(today_f,
                          text=f"  Out: {today_out}",
                          font=("Arial", 10),
@@ -486,7 +492,7 @@ class StaffFrame(tk.Frame):
 
             tk.Frame(self._stats_body, bg=C["sidebar"], height=1).pack(fill=tk.X, pady=4)
 
-            # —€—€ This month attendance —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+            # â€”â‚¬â€”â‚¬ This month attendance â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
             tk.Label(self._stats_body,
                      text=f"This Month ({mo})",
                      font=("Arial", 10, "bold"),
@@ -510,7 +516,7 @@ class StaffFrame(tk.Frame):
 
             tk.Frame(self._stats_body, bg=C["sidebar"], height=1).pack(fill=tk.X, pady=6)
 
-            # —€—€ Sales & Commission —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+            # â€”â‚¬â€”â‚¬ Sales & Commission â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
             tk.Label(self._stats_body, text="This Month",
                      font=("Arial", 10, "bold"),
                      bg=C["card"], fg=C["muted"]).pack(anchor="w")
@@ -538,6 +544,7 @@ class StaffFrame(tk.Frame):
             for i in self.tree.get_children():
                 self.tree.delete(i)
             staff_data = get_staff()
+            staff_data = self._reconcile_staff_with_users(staff_data)
             query = getattr(self, "_staff_search_var", None)
             query = query.get().strip().lower() if query else ""
             total = len(staff_data)
@@ -545,8 +552,11 @@ class StaffFrame(tk.Frame):
             managers = 0
             shown = 0
             for name, s in staff_data.items():
-                if s.get("active", True):
-                    active += 1
+                is_active = not bool(s.get("inactive", False)) and s.get("active", True)
+                if not is_active:
+                    continue  # Do not list deactivated staff
+                
+                active += 1
                 role = str(s.get("role", ""))
                 if role.strip().lower() in {"manager", "lead", "supervisor", "owner"}:
                     managers += 1
@@ -563,16 +573,12 @@ class StaffFrame(tk.Frame):
                     role,
                     s.get("phone", ""),
                     f"{s.get('commission_pct', 0)}%",
-                    "✅" if s.get("active", True) else "❌",
+                    "Active"
                 ))
                 last_item = self.tree.get_children()[-1]
-                values = list(self.tree.item(last_item, "values"))
-                is_active = not bool(s.get("inactive", False))
-                values[-1] = "Active" if is_active else "Inactive"
                 self.tree.item(
                     last_item,
-                    values=tuple(values),
-                    tags=("active" if is_active else "inactive",),
+                    tags=("active",),
                 )
             for key, val in {
                 "total": str(total),
@@ -592,6 +598,87 @@ class StaffFrame(tk.Frame):
                 self._staff_result_label.config(text=msg)
         except Exception as e:
             app_log(f"[_load_tree] {e}")
+
+    def _reconcile_staff_with_users(self, staff_data: dict) -> dict:
+        """Ensure staff list contains active non-owner login users."""
+        if not isinstance(staff_data, dict):
+            staff_data = {}
+        try:
+            from auth import get_users
+            users = get_users() or {}
+            changed = False
+            for username, user_row in users.items():
+                role = str(user_row.get("role", "")).strip().lower()
+                if role not in {"staff", "manager", "receptionist"}:
+                    continue
+                display_name = str(user_row.get("name", "")).strip() or str(username).strip()
+                if not display_name:
+                    continue
+                matched_key = None
+                uname_norm = str(username).strip().lower()
+                name_norm = display_name.lower()
+                duplicate_display = sum(
+                    1 for other_username, other_user in users.items()
+                    if str(other_username).strip().lower() != uname_norm
+                    and str(other_user.get("name", "")).strip().lower() == name_norm
+                ) > 0
+                for key, rec in staff_data.items():
+                    if str(rec.get("username", "")).strip().lower() == uname_norm:
+                        matched_key = key
+                        break
+                if matched_key is None:
+                    for key, rec in staff_data.items():
+                        rec_username = str(rec.get("username", "")).strip().lower()
+                        can_claim_legacy_name = (
+                            not rec_username
+                            and (not duplicate_display or uname_norm == name_norm)
+                        )
+                        if str(key).strip().lower() == name_norm and (rec_username == uname_norm or can_claim_legacy_name):
+                            matched_key = key
+                            break
+                target_key = matched_key or display_name
+                if matched_key is None and target_key in staff_data:
+                    target_key = f"{display_name} ({username})"
+                if matched_key and matched_key != display_name and display_name in staff_data:
+                    existing_display_user = str(staff_data.get(display_name, {}).get("username", "")).strip().lower()
+                    if existing_display_user and existing_display_user != uname_norm:
+                        target_key = matched_key
+                current = staff_data.get(target_key, {})
+                if str(current.get("username", "")).strip().lower() not in {"", uname_norm}:
+                    target_key = f"{display_name} ({username})"
+                    current = staff_data.get(target_key, {})
+                old_key_to_remove = None
+                if matched_key and matched_key != target_key:
+                    old_key_to_remove = matched_key
+                if not matched_key:
+                    for key, rec in staff_data.items():
+                        if str(rec.get("username", "")).strip().lower() == uname_norm:
+                            old_key_to_remove = key
+                            break
+                if old_key_to_remove and old_key_to_remove != target_key:
+                    current = staff_data.pop(old_key_to_remove, current)
+                    changed = True
+                user_active = bool(user_row.get("active", True))
+                merged = {
+                    "role": role.title(),
+                    "phone": current.get("phone", ""),
+                    "commission_pct": current.get("commission_pct", 0),
+                    "salary": current.get("salary", 0),
+                    "join_date": current.get("join_date") or today_str(),
+                    "active": user_active,
+                    "inactive": not user_active,
+                    "attendance": current.get("attendance", []),
+                    "sales": current.get("sales", []),
+                    "username": username,
+                }
+                if current != merged:
+                    staff_data[target_key] = merged
+                    changed = True
+            if changed:
+                save_staff(staff_data)
+        except Exception as e:
+            app_log(f"[staff reconcile users] {e}")
+        return staff_data
 
     def _add_dialog(self, staff_name=""):
         if self._rbac_denied(): return
@@ -690,8 +777,8 @@ class StaffFrame(tk.Frame):
                  bg=C["sidebar"], fg=C["text"]).pack(side=tk.LEFT)
         tk.Frame(win, bg=C["teal"], height=2).pack(fill=tk.X)
 
-        f, _canvas, _container = make_scrollable(
-            win, bg=C["bg"], padx=30, pady=10)
+        f, footer, _canvas, _container = make_toplevel_scrollable_with_footer(
+            win, bg=C["bg"], footer_bg=C["card"], padx=30, pady=10)
 
         entries = {}
         for lbl, key, default in [
@@ -699,7 +786,7 @@ class StaffFrame(tk.Frame):
             ("Role/Designation:",   "role",           s.get("role", "")),
             ("Phone:",              "phone",          s.get("phone", "")),
             ("Commission %:",       "commission_pct", str(s.get("commission_pct", 0))),
-            ("Salary (₹/month):",   "salary",         str(s.get("salary", 0))),
+            ("Salary (â‚¹/month):",   "salary",         str(s.get("salary", 0))),
             ("Join Date (YYYY-MM-DD):", "join_date",  s.get("join_date", today_str())),
         ]:
             tk.Label(f, text=lbl, bg=C["bg"],
@@ -748,12 +835,17 @@ class StaffFrame(tk.Frame):
             except Exception as e:
                 messagebox.showerror("Error", f"Could not save staff: {e}")
 
-        ModernButton(f, text="💾  Save Staff",
+        ModernButton(footer, text="Save Staff",
                      command=_save,
                      color=C["teal"], hover_color=C["blue"],
                      width=380, height=38, radius=8,
                      font=("Arial", 11, "bold"),
-                     ).pack(fill=tk.X, pady=(4, 0))
+                     ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ModernButton(footer, text="Close", command=lambda: (win.grab_release(), win.destroy()),
+                     color=C["sidebar"], hover_color=C["blue"],
+                     width=110, height=38, radius=8,
+                     font=("Arial", 10, "bold"),
+                     ).pack(side=tk.RIGHT, padx=(10, 0))
         reveal_when_ready(win)
 
     def _change_photo(self, name: str):
@@ -817,16 +909,49 @@ class StaffFrame(tk.Frame):
         name = self.tree.item(sel[0], "values")[0]
         if messagebox.askyesno("Delete", f"Delete '{name}'?"):
             try:
-                staff = get_staff()
-                staff.pop(name, None)
+                staff = self._reconcile_staff_with_users(get_staff())
+                key = name if name in staff else None
+                if key is None:
+                    key = next((k for k in staff if str(k).strip().casefold() == str(name).strip().casefold()), None)
+                if not key:
+                    messagebox.showwarning("Not Found", "Could not find selected staff member.")
+                    return
+                rec = staff.get(key, {})
+                linked_username = str(rec.get("username", "")).strip().lower()
+                staff.pop(key, None)
                 save_staff(staff)
+                try:
+                    from auth import get_users, _save_users
+                    users = get_users()
+                    current_user = str(getattr(self.app, "current_user", {}).get("username", "")).strip().lower()
+                    # Never deactivate by display name: duplicate names can belong to
+                    # different login users. Only an explicit username link is safe.
+                    matched_user = linked_username if linked_username and linked_username in users else None
+                    if matched_user and matched_user != current_user:
+                        row = users.get(matched_user, {})
+                        row["active"] = False
+                        users[matched_user] = row
+                        _save_users(users)
+                except Exception as e:
+                    app_log(f"[staff delete linked user sync] {e}")
                 self._load_tree()
             except Exception as e:
                 messagebox.showerror("Error", f"Could not delete: {e}")
 
-    # —€—€ Attendance —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+    def _open_user_management(self):
+        try:
+            from auth import UserManagerWindow
+            UserManagerWindow(
+                self.winfo_toplevel(),
+                getattr(self.app, "current_user", {}) or {},
+                on_users_changed=self.refresh,
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open User Management: {e}")
+
+    # â€”â‚¬â€”â‚¬ Attendance â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
     def _build_attendance(self, parent):
-        # —€—€ Tab switcher: Daily view | Performance sheet —€—€
+        # â€”â‚¬â€”â‚¬ Tab switcher: Daily view | Performance sheet â€”â‚¬â€”â‚¬
         intro = tk.Frame(parent, bg=C["card"], padx=14, pady=10)
         intro.pack(fill=tk.X, padx=15, pady=(8, 6))
         tk.Label(intro, text="Attendance Workspace",
@@ -852,23 +977,23 @@ class StaffFrame(tk.Frame):
                 btn_perf.set_color(C["teal"], C["blue"])
                 btn_daily.set_color(C["sidebar"], C["blue"])
 
-        btn_daily = ModernButton(tab_row, text="📋  Daily View",
+        btn_daily = ModernButton(tab_row, text="ðŸ“‹  Daily View",
                                  command=lambda: _switch("daily"),
                                  color=C["teal"], hover_color=C["blue"],
                                  width=140, height=32, radius=8,
                                  font=("Arial", 10, "bold"))
         btn_daily.pack(side=tk.LEFT, padx=(0, 4))
 
-        btn_perf = ModernButton(tab_row, text="📊  Performance Sheet",
+        btn_perf = ModernButton(tab_row, text="ðŸ“Š  Performance Sheet",
                                 command=lambda: _switch("perf"),
                                 color=C["sidebar"], hover_color=C["blue"],
                                 width=168, height=32, radius=8,
                                 font=("Arial", 10, "bold"))
         btn_perf.pack(side=tk.LEFT)
 
-        # ════════════════════════════════════════
+        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         # DAILY VIEW
-        # ════════════════════════════════════════
+        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         daily_f = tk.Frame(parent, bg=C["bg"])
         daily_f.pack(fill=tk.BOTH, expand=True)
 
@@ -884,7 +1009,7 @@ class StaffFrame(tk.Frame):
         self.att_date.pack(side=tk.LEFT, ipady=5, padx=(0, 6))
         self.att_date.insert(0, today_str())
 
-        ModernButton(ctrl, text="📋  Load",
+        ModernButton(ctrl, text="ðŸ“‹  Load",
                      command=self._load_attendance,
                      color=C["teal"], hover_color=C["blue"],
                      width=80, height=30, radius=8,
@@ -909,10 +1034,10 @@ class StaffFrame(tk.Frame):
         bb = tk.Frame(daily_f, bg=C["bg"])
         bb.pack(fill=tk.X, padx=15, pady=8)
         for txt, clr, hclr, cmd in [
-            ("✅ Present",   C["green"],  "#1a7a45", lambda: self._mark_att("Present")),
-            ("🕐 Clock Out", C["teal"],   C["blue"], self._clock_out),
-            ("❌ Absent",    C["red"],    "#c0392b", lambda: self._mark_att("Absent")),
-            ("🏖️ Leave",     C["orange"], "#d35400", lambda: self._mark_att("Leave")),
+            ("âœ… Present",   C["green"],  "#1a7a45", lambda: self._mark_att("Present")),
+            ("ðŸ• Clock Out", C["teal"],   C["blue"], self._clock_out),
+            ("âŒ Absent",    C["red"],    "#c0392b", lambda: self._mark_att("Absent")),
+            ("ðŸ–ï¸ Leave",     C["orange"], "#d35400", lambda: self._mark_att("Leave")),
         ]:
             ModernButton(bb, text=txt, command=cmd,
                          color=clr, hover_color=hclr,
@@ -920,9 +1045,9 @@ class StaffFrame(tk.Frame):
                          font=("Arial", 10, "bold"),
                          ).pack(side=tk.LEFT, padx=3)
 
-        # ════════════════════════════════════════
+        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         # PERFORMANCE SHEET
-        # ════════════════════════════════════════
+        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         self._show_session_history = self._is_owner_user()
         if self._show_session_history:
             hist_wrap = tk.Frame(daily_f, bg=C["bg"])
@@ -952,7 +1077,7 @@ class StaffFrame(tk.Frame):
             self.session_tree.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
         perf_f = tk.Frame(parent, bg=C["bg"])
-        # not packed by default — shown on tab switch
+        # not packed by default â€” shown on tab switch
 
         # Date range selector
         pr_ctrl = tk.Frame(perf_f, bg=C["bg"], pady=8)
@@ -980,7 +1105,7 @@ class StaffFrame(tk.Frame):
         self.perf_from.insert(0, first_day)
         self.perf_to.insert(0, today_str())
 
-        ModernButton(pr_ctrl, text="📊  Generate",
+        ModernButton(pr_ctrl, text="ðŸ“Š  Generate",
                      command=self._gen_perf_sheet,
                      color=C["teal"], hover_color=C["blue"],
                      width=110, height=30, radius=8,
@@ -1106,7 +1231,7 @@ class StaffFrame(tk.Frame):
             NAME_W = 120
             SUM_W  = 42
 
-            # —€—€ Header row —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+            # â€”â‚¬â€”â‚¬ Header row â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
             hdr = tk.Frame(self._perf_inner, bg=C["sidebar"])
             hdr.pack(fill=tk.X)
 
@@ -1134,7 +1259,7 @@ class StaffFrame(tk.Frame):
 
             tk.Frame(self._perf_inner, bg=C["teal"], height=2).pack(fill=tk.X)
 
-            # —€—€ Staff rows —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+            # â€”â‚¬â€”â‚¬ Staff rows â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
             for idx, (name, s) in enumerate(staff.items()):
                 row_bg = C["card"] if idx % 2 == 0 else C["bg"]
                 row = tk.Frame(self._perf_inner, bg=row_bg)
@@ -1155,8 +1280,8 @@ class StaffFrame(tk.Frame):
 
                 for d in dates:
                     att = att_list.get(d)
-                    status = att.get("status", "—") if att else "—"
-                    short  = {"Present":"P","Absent":"A","Leave":"L"}.get(status, "—")
+                    status = att.get("status", "â€”") if att else "â€”"
+                    short  = {"Present":"P","Absent":"A","Leave":"L"}.get(status, "â€”")
 
                     cell_bg = bg_map.get(status, row_bg)
                     cell_fg = fg_map.get(status, C["muted"])
@@ -1188,7 +1313,7 @@ class StaffFrame(tk.Frame):
                              width=SUM_W//8,
                              anchor="center").pack(side=tk.LEFT)
 
-            # —€—€ Total row —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+            # â€”â‚¬â€”â‚¬ Total row â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
             tk.Frame(self._perf_inner, bg=C["teal"], height=1).pack(fill=tk.X, pady=(4, 0))
             tot_row = tk.Frame(self._perf_inner, bg=C["sidebar"])
             tot_row.pack(fill=tk.X)
@@ -1242,7 +1367,7 @@ class StaffFrame(tk.Frame):
                 if att_today:
                     att_today = attendance_sync_legacy_fields(att_today)
                     latest = attendance_latest_session(att_today)
-                status = att_today.get("status", "—") if att_today else "—"
+                status = att_today.get("status", "â€”") if att_today else "â€”"
                 in_t   = latest.get("in_time", "") if latest else (
                     att_today.get("in_time", "") if att_today else "")
                 out_t  = latest.get("out_time", "") if latest else (
@@ -1308,7 +1433,7 @@ class StaffFrame(tk.Frame):
             messagebox.showerror("Error", f"Could not save attendance: {e}")
 
     def _clock_out(self):
-        """Separate clock-out — records out_time properly."""
+        """Separate clock-out â€” records out_time properly."""
         sel = self.att_tree.selection()
         if not sel:
             messagebox.showwarning("Select", "Select a staff member.")
@@ -1350,7 +1475,7 @@ class StaffFrame(tk.Frame):
                 f"{name} has no attendance record for {dt}.\n"
                 "Mark Present first.")
 
-    # —€—€ Commission —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+    # â€”â‚¬â€”â‚¬ Commission â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬â€”â‚¬
     def _build_commission(self, parent):
         intro = tk.Frame(parent, bg=C["card"], padx=14, pady=10)
         intro.pack(fill=tk.X, padx=15, pady=(8, 6))
@@ -1371,7 +1496,7 @@ class StaffFrame(tk.Frame):
         self.comm_month.pack(side=tk.LEFT, ipady=5, padx=(0, 10))
         self.comm_month.insert(0, month_str())
 
-        ModernButton(ctrl, text="📊  Calculate",
+        ModernButton(ctrl, text="ðŸ“Š  Calculate",
                      command=self._calc_commission,
                      color=C["teal"], hover_color=C["blue"],
                      width=110, height=30, radius=8,
@@ -1435,6 +1560,10 @@ class StaffFrame(tk.Frame):
             self._gen_perf_sheet()
         except Exception:
             pass
+        try:
+            self._calc_commission()
+        except Exception:
+            pass
 
 # v5 staff compatibility overrides -------------------------------------------
 def get_staff() -> dict:
@@ -1450,3 +1579,4 @@ def save_staff(data: dict) -> bool:
         save_staff_legacy_map_v5(data)
         return True
     return save_json(F_STAFF, data)
+

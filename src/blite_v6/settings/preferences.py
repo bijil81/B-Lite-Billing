@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Mapping
 
+from src.blite_v6.settings.zoom_preferences import (
+    clamp_global_zoom,
+    normalize_billing_workflow_zoom,
+)
+
 
 def build_preferences_payload(
     current_settings: Mapping,
@@ -19,9 +24,15 @@ def build_preferences_payload(
     use_v5_inventory_db: bool,
     use_v5_staff_db: bool,
     use_v5_product_variants_db: bool,
+    use_v5_users_db: bool = False,
+    use_v5_offers_db: bool = False,
+    use_v5_memberships_db: bool = False,
+    use_v5_expenses_db: bool = False,
     start_with_windows: bool,
     default_report_period: str,
     show_below_cost_alert: bool = True,
+    ui_scale: object = 1.0,
+    billing_workflow_zoom: object = "fit",
 ) -> dict:
     cfg = dict(current_settings)
     cfg["default_payment"] = str(default_payment)
@@ -31,6 +42,8 @@ def build_preferences_payload(
     cfg["show_ai_floating_button"] = bool(show_ai_floating_button)
     cfg["enable_animations"] = bool(enable_animations)
     cfg["show_below_cost_alert"] = bool(show_below_cost_alert)
+    cfg["ui_scale"] = clamp_global_zoom(ui_scale)
+    cfg["billing_workflow_zoom"] = normalize_billing_workflow_zoom(billing_workflow_zoom)
     cfg["use_v5_customers_db"] = bool(use_v5_customers_db)
     cfg["use_v5_appointments_db"] = bool(use_v5_appointments_db)
     cfg["use_v5_reports_db"] = bool(use_v5_reports_db)
@@ -38,6 +51,10 @@ def build_preferences_payload(
     cfg["use_v5_inventory_db"] = bool(use_v5_inventory_db)
     cfg["use_v5_staff_db"] = bool(use_v5_staff_db)
     cfg["use_v5_product_variants_db"] = bool(use_v5_product_variants_db)
+    cfg["use_v5_users_db"] = bool(use_v5_users_db)
+    cfg["use_v5_offers_db"] = bool(use_v5_offers_db)
+    cfg["use_v5_memberships_db"] = bool(use_v5_memberships_db)
+    cfg["use_v5_expenses_db"] = bool(use_v5_expenses_db)
     cfg["start_with_windows"] = bool(start_with_windows)
     cfg["default_report_period"] = str(default_report_period)
     return cfg

@@ -164,8 +164,8 @@ def _detect_browser() -> str:
             return "edge"
         if "firefox" in p:
             return "firefox"
-    except Exception:
-        pass
+    except Exception as e:
+        app_log(f"[whatsapp_helper._detect_browser] Registry read failed, falling back to file-path detection: {e}")
 
     browser_paths = {
         "edge": [
@@ -212,9 +212,10 @@ def _get_driver(headless: bool = False):
         if _driver is not None:
             try:
                 _driver.quit()
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[whatsapp_helper._get_driver] Stale driver quit failed: {e}")
             _driver = None
+
 
         _set_state(STATE_STARTING_BROWSER, "Starting WhatsApp browser...")
 
@@ -567,8 +568,9 @@ def _open_default_browser(url: str) -> bool:
         # not force that from the app.
         if webbrowser.open(url, new=0, autoraise=True):
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        app_log(f"[whatsapp_helper._open_default_browser] webbrowser.open failed: {e}")
+
     try:
         os.startfile(url)  # type: ignore[attr-defined]
         return True
@@ -671,8 +673,9 @@ def _click_send_control(drv) -> bool:
         try:
             _js_click(drv, btn)
             return True
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[whatsapp_helper._click_send_control] JS click on send btn failed: {e}")
+
 
     try:
         return bool(
@@ -699,8 +702,10 @@ def _click_send_control(drv) -> bool:
                 """
             )
         )
-    except Exception:
+    except Exception as e:
+        app_log(f"[whatsapp_helper._click_send_control] JS send fallback failed: {e}")
         return False
+
 
 
 def _press_enter_to_send(drv) -> bool:
@@ -709,8 +714,9 @@ def _press_enter_to_send(drv) -> bool:
         return False
     try:
         _js_click(drv, box)
-    except Exception:
-        pass
+    except Exception as e:
+        app_log(f"[whatsapp_helper._press_enter_to_send] JS click on compose box failed: {e}")
+
     try:
         from selenium.webdriver.common.keys import Keys
 
@@ -758,8 +764,9 @@ def _compose_ready(drv, timeout=20) -> bool:
                 """
             ):
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[whatsapp_helper._compose_ready] JS compose check failed: {e}")
+
         time.sleep(0.5)
     return False
 
@@ -908,8 +915,9 @@ def send_image(phone: str, image_path: str, caption: str = "",
                 try:
                     _js_click(drv, caption_box)
                     caption_box.send_keys(caption)
-                except Exception:
-                    pass
+                except Exception as e:
+                    app_log(f"[whatsapp_helper.send_image] Caption box input failed: {e}")
+
 
         return _wait_manual_or_auto_send(drv, manual_send_timeout, auto_send_fallback)
     except Exception as exc:

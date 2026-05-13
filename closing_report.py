@@ -169,6 +169,19 @@ def _generate_closing_pdf_inner(dt: str) -> str:
     line("SUMMARY", bold=True, size=13,
          color=(0.1, 0.1, 0.5))
     divider()
+    due_collected = 0.0
+    try:
+        from db import db_transaction
+        with db_transaction() as conn:
+            row = conn.execute(
+                "SELECT SUM(amount_paid) as tot FROM v5_due_settlements WHERE date(datetime(created_at, 'localtime')) = ?",
+                (dt,)
+            ).fetchone()
+            if row and row["tot"]:
+                due_collected = float(row["tot"])
+    except Exception as e:
+        app_log(f"Error fetching due settlements PDF: {e}")
+
     for lbl, val, col in [
         ("Total Bills",       str(len(bills)),         (0,0,0)),
         ("Gross Sales",       fmt_currency(retail_summary.gross_sales), (0, 0.5, 0.2)),
@@ -178,6 +191,7 @@ def _generate_closing_pdf_inner(dt: str) -> str:
         ("Net Revenue",       fmt_currency(total_rev), (0, 0.5, 0.2)),
         ("GST Total",         fmt_currency(retail_summary.gst_total), (0.25, 0.25, 0.25)),
         ("Total Expenses",    fmt_currency(total_exp), (0.8, 0, 0)),
+        ("Due Collected",     fmt_currency(due_collected), (0.1, 0.5, 0.7)),
         ("NET PROFIT",        fmt_currency(net_profit),
          (0, 0.5, 0.2) if net_profit >= 0 else (0.8, 0, 0)),
     ]:
@@ -442,6 +456,13 @@ class ClosingReportFrame(tk.Frame):
                      font=("Arial",scaled_value(10, 10, 9),"bold"),
                      ).pack(side=tk.LEFT, padx=4)
 
+        ModernButton(ctrl, text="⊘ Void Invoice",
+                     command=self._open_void_dialog,
+                     color="#c0392b", hover_color="#922b21",
+                     width=scaled_value(130, 120, 108), height=scaled_value(34, 32, 28), radius=8,
+                     font=("Arial", scaled_value(10, 10, 9), "bold"),
+                     ).pack(side=tk.LEFT, padx=(12, 4))
+
         list_area = tk.Frame(left_card, bg=C["card"])
         list_area.pack(fill=tk.BOTH, expand=True)
 
@@ -511,6 +532,18 @@ class ClosingReportFrame(tk.Frame):
         self.cr_tree.bind("<Button-3>", self._show_closing_report_context_menu)
 
         self._preview()
+
+    def _open_void_dialog(self):
+        """Minimal wiring — opens the Void Invoice dialog. No logic here."""
+        try:
+            from src.blite_v6.ui.void_invoice_dialog import open_void_dialog
+            open_void_dialog(self.winfo_toplevel(), app=getattr(self, "app", None))
+            # Refresh the bill list after voiding so the [VOID] tag is visible
+            self._preview()
+        except Exception as e:
+            app_log(f"[_open_void_dialog] {e}")
+            from tkinter import messagebox
+            messagebox.showerror("Error", f"Could not open Void dialog:\n{e}")
 
     def _show_closing_report_context_menu(self, event):
         row_id = self.cr_tree.identify_row(event.y)
@@ -603,36 +636,64 @@ class ClosingReportFrame(tk.Frame):
         exps  = [e for e in get_expenses()
                  if e.get("date","")[:10] == dt]
 
+        # Configure a tag for voided rows
+        self.cr_tree.tag_configure("void_row", foreground="#e74c3c")
+
         for i in self.cr_tree.get_children(): self.cr_tree.delete(i)
         for b in bills:
-            self.cr_tree.insert("", tk.END, values=(
-                b["invoice"], b.get("time", str(b.get("date", ""))[11:16]), b["name"], b["phone"],
+            is_voided = bool(b.get("is_voided", 0))
+            inv_label = f"[VOID] {b['invoice']}" if is_voided else b["invoice"]
+            row_tags  = ("void_row",) if is_voided else ()
+            self.cr_tree.insert("", tk.END, tags=row_tags, values=(
+                inv_label,
+                b.get("time", str(b.get("date", ""))[11:16]),
+                b["name"], b["phone"],
                 b["payment"],
                 fmt_currency(b["discount"]),
-                fmt_currency(b["total"]),
+                fmt_currency(b["total"]) if not is_voided else "—",
             ))
         if hasattr(self, "cr_audit_note_lbl"):
             self.cr_audit_note_lbl.config(
                 text="Click a bill row to view billed-by audit info here." if self._show_bill_audit else ""
             )
 
-        total_rev = sum(b["total"] for b in bills)
+        # Exclude voided invoices from financial totals
+        active_bills = [b for b in bills if not b.get("is_voided", 0)]
+        total_rev = sum(b["total"] for b in active_bills)
         total_exp = sum(safe_float(e.get("amount", 0)) for e in exps)
         profit    = total_rev - total_exp
 
+        due_collected = 0.0
+        try:
+            from db import db_transaction
+            with db_transaction() as conn:
+                row = conn.execute(
+                    "SELECT SUM(amount_paid) as tot FROM v5_due_settlements WHERE date(datetime(created_at, 'localtime')) = ?",
+                    (dt,)
+                ).fetchone()
+                if row and row["tot"]:
+                    due_collected = float(row["tot"])
+        except Exception as e:
+            app_log(f"Error fetching due settlements: {e}")
+
         for w in self.cr_cards.winfo_children():
             w.destroy()
+
+        for col in range(5):
+            self.cr_cards.grid_columnconfigure(col, weight=1, uniform="closing_summary")
+
         card_items = [
-            ("Bills",       str(len(bills)),         C["purple"]),
-            ("Revenue",     fmt_currency(total_rev), C["teal"]),
-            ("Expenses",    fmt_currency(total_exp), C["orange"]),
-            ("Net Profit",  fmt_currency(profit),
+            ("Bills",      str(len(active_bills)),                C["purple"]),
+            ("Revenue",    fmt_currency(total_rev),               C["teal"]),
+            ("Expenses",   fmt_currency(total_exp),               C["orange"]),
+            ("Due Col.",   fmt_currency(due_collected),           C.get("blue", "#2980b9")),
+            ("Net Profit", fmt_currency(profit),
              C["green"] if profit >= 0 else C["red"]),
         ]
         for idx, (lbl, val, col) in enumerate(card_items):
             card = tk.Frame(self.cr_cards, bg=col, padx=scaled_value(14, 12, 10), pady=scaled_value(8, 8, 6), height=scaled_value(58, 54, 48))
             card.grid(row=0, column=idx, sticky="nsew",
-                      padx=(0, 8 if idx < 3 else 0))
+                      padx=(0, 8 if idx < 4 else 0))
             card.grid_propagate(False)
             tk.Label(card, text=val, font=("Arial", scaled_value(14, 13, 11), "bold"),
                      bg=col, fg="white").pack(anchor="w")

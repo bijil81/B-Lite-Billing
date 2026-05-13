@@ -94,6 +94,7 @@ def test_advanced_payload_preserves_settings_and_feature_flags():
         feature_multibranch=False,
         whatsapp_api_config=wa_cfg,
         multibranch_config=mb_cfg,
+        sidebar_module_visibility={"appointments": False, "inventory": True},
     )
 
     assert result["salon_name"] == "Demo"
@@ -104,6 +105,7 @@ def test_advanced_payload_preserves_settings_and_feature_flags():
     assert result["feature_multibranch"] is False
     assert result["whatsapp_api_config"] == wa_cfg
     assert result["multibranch_config"] == mb_cfg
+    assert result["sidebar_module_visibility"] == {"appointments": False, "inventory": True}
     assert current == {"salon_name": "Demo", "unknown": "keep"}
     assert ADVANCED_SAVED_MESSAGE.startswith("Advanced feature settings saved.")
 
@@ -136,4 +138,3 @@ def test_salon_settings_imports_phase6_helpers():
     assert salon_settings.build_ai_config is advanced_integrations.build_ai_config
     assert salon_settings.build_whatsapp_api_config is advanced_integrations.build_whatsapp_api_config
     assert salon_settings.build_multibranch_config is advanced_integrations.build_multibranch_config
-

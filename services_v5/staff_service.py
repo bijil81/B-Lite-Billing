@@ -50,6 +50,7 @@ class StaffService:
                 "commission_pct": float(staff.get("commission_pct", 0.0) or 0.0),
                 "salary": float(staff.get("salary", 0.0) or 0.0),
                 "photo": staff.get("photo_path", ""),
+                "active": bool(staff.get("active", 1)),
                 "inactive": not bool(staff.get("active", 1)),
                 "attendance": list(by_day.values()),
                 "sales": [],
@@ -58,6 +59,10 @@ class StaffService:
 
     def sync_legacy_staff_map(self, data: dict) -> None:
         for key, staff in data.items():
+            if "active" in staff:
+                is_active = bool(staff.get("active", True))
+            else:
+                is_active = not bool(staff.get("inactive", False))
             self.repo.upsert_legacy_staff({
                 "legacy_name": key,
                 "display_name": staff.get("name", key),
@@ -65,7 +70,7 @@ class StaffService:
                 "phone": staff.get("phone", ""),
                 "commission_pct": float(staff.get("commission_pct", 0.0) or 0.0),
                 "salary": float(staff.get("salary", 0.0) or 0.0),
-                "active": not bool(staff.get("inactive", False)),
+                "active": is_active,
                 "photo_path": staff.get("photo", ""),
                 "notes": "",
             })
@@ -90,3 +95,10 @@ class StaffService:
                         "source": "staff_ui",
                     })
             self.attendance_repo.replace_staff_sessions(key, sessions)
+        
+        # Deactivate staff that are missing from the incoming payload
+        incoming_keys = set(data.keys())
+        for existing in self.repo.list_all():
+            legacy_name = existing.get("legacy_name", "")
+            if legacy_name and legacy_name not in incoming_keys:
+                self.repo.deactivate_staff(legacy_name)

@@ -51,3 +51,11 @@ class UsersRepository:
                 str(user.get("display_name", "")),
                 normalize_bool(user.get("active", True)),
             ))
+
+    def delete(self, username: str) -> None:
+        ensure_v5_schema()
+        with connection_scope() as conn:
+            conn.execute(
+                "DELETE FROM v5_app_users WHERE username = ?",
+                (str(username or "").strip().lower(),),
+            )

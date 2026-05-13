@@ -64,6 +64,9 @@ class OffersService:
     def delete_offer(self, name: str) -> None:
         self.repo.delete_offer(name)
 
+    def hard_delete_offer(self, name: str) -> None:
+        self.repo.hard_delete_offer(name)
+
     @staticmethod
     def _to_legacy_offer(row: dict) -> dict:
         return {

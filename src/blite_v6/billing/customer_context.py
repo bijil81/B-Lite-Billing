@@ -90,7 +90,8 @@ def build_phone_lookup_state(phone: str | None, customer: Mapping[str, Any] | No
 
 
 def format_membership_info(membership: Mapping[str, Any] | None) -> dict[str, Any]:
-    if not membership or membership.get("status") != "Active":
+    status = str((membership or {}).get("status", "")).strip().lower()
+    if not membership or status not in {"active", "1", "true", "yes"}:
         return {
             "active": False,
             "discount_pct": 0.0,

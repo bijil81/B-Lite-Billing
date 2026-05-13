@@ -92,6 +92,7 @@ def build_advanced_payload(
     feature_multibranch: bool,
     whatsapp_api_config: Mapping,
     multibranch_config: Mapping,
+    sidebar_module_visibility: Mapping | None = None,
 ) -> dict:
     cfg = dict(current_settings)
     cfg["feature_ai_assistant"] = bool(feature_ai_assistant)
@@ -100,6 +101,11 @@ def build_advanced_payload(
     cfg["feature_multibranch"] = bool(feature_multibranch)
     cfg["whatsapp_api_config"] = dict(whatsapp_api_config)
     cfg["multibranch_config"] = dict(multibranch_config)
+    if sidebar_module_visibility is None:
+        existing = current_settings.get("sidebar_module_visibility", {})
+        cfg["sidebar_module_visibility"] = dict(existing) if isinstance(existing, Mapping) else {}
+    else:
+        cfg["sidebar_module_visibility"] = dict(sidebar_module_visibility)
     return cfg
 
 
@@ -132,4 +138,3 @@ def ai_status_view(enabled: bool, key: str, colors: Mapping[str, str]) -> tuple[
     if key:
         return "Key looks invalid (too short)", colors["red"]
     return "API key not set", colors["orange"]
-

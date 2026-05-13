@@ -11,10 +11,10 @@ from utils import (C, load_json, safe_float,
                    now_str, today_str, DATA_DIR, F_CUSTOMERS)
 from date_helpers import iso_to_display_date
 from ui_theme import apply_treeview_column_alignment, ModernButton, ensure_segoe_ttk_font
-from ui_utils import make_searchable_combobox
-from ui_responsive import make_scrollable
+from ui_responsive import make_toplevel_scrollable_with_footer
 from services_v5.membership_service import MembershipService
 from services_v5.customer_service import CustomerService
+from src.blite_v6.ui.input_behaviors import attach_first_letter_caps
 from src.blite_v6.app.window_lifecycle import hide_while_building, reveal_when_ready
 
 F_MEMBERSHIPS   = os.path.join(DATA_DIR, "memberships.json")
@@ -57,18 +57,29 @@ def save_pkg_templates(data: list) -> bool:
 
 
 def get_memberships() -> dict:
-    memberships = _MEMBERSHIP_SERVICE.get_all()
-    if memberships:
-        return memberships
+    from adapters.membership_adapter import use_v5_memberships_db, get_memberships_legacy_map_v5
+    if use_v5_memberships_db():
+        memberships = get_memberships_legacy_map_v5()
+        if memberships:
+            return memberships
+        return {}
     return load_json(F_MEMBERSHIPS, {})
 
 
 def save_memberships(data: dict) -> bool:
-    _MEMBERSHIP_SERVICE.save_all(data)
+    from adapters.membership_adapter import use_v5_memberships_db, save_memberships_legacy_map_v5
+    if use_v5_memberships_db():
+        save_memberships_legacy_map_v5(data)
+        return True
+    from utils import save_json
+    save_json(F_MEMBERSHIPS, data)
     return True
 
 
 def get_customer_membership(phone: str):
+    phone = str(phone or "").strip()
+    if not phone:
+        return None
     membership = _MEMBERSHIP_SERVICE.get_customer_membership(phone)
     if not membership:
         legacy = load_json(F_MEMBERSHIPS, {}).get(phone)
@@ -242,15 +253,22 @@ class MembershipFrame(tk.Frame):
         win.minsize(520, 460)
         win.resizable(True, True)
         win.grab_set()
-        win.protocol("WM_DELETE_WINDOW",
-                     lambda: (win.grab_release(), win.destroy()))
+
+        def _close_dialog():
+            try:
+                win.grab_release()
+            except Exception:
+                pass
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _close_dialog)
 
         tk.Label(win, text="Assign Membership Package",
                  font=("Segoe UI", 13, "bold"),
                  bg=C["bg"], fg=C["text"]).pack(pady=(15, 10))
 
-        f, _canvas, _container = make_scrollable(
-            win, bg=C["bg"], padx=30, pady=10)
+        f, footer, _canvas, _container = make_toplevel_scrollable_with_footer(
+            win, bg=C["bg"], footer_bg=C["card"], padx=30, pady=10)
 
         customers_map = _CUSTOMER_SERVICE.build_legacy_customer_map()
         customer_choices = []
@@ -263,15 +281,20 @@ class MembershipFrame(tk.Frame):
         tk.Label(f, text="Customer:", bg=C["bg"],
                  fg=C["muted"], font=("Segoe UI", 12)).pack(anchor="w")
         customer_var = tk.StringVar()
-        customer_cb = ttk.Combobox(
-            f,
-            textvariable=customer_var,
-            values=customer_choices,
-            state="normal",
-            font=("Segoe UI", 10),
+        customer_entry = tk.Entry(
+            f, textvariable=customer_var, font=("Segoe UI", 10),
+            bg=C["input"], fg=C["text"], bd=0, insertbackground=C["accent"]
         )
-        customer_cb.pack(fill=tk.X, pady=(3, 8))
-        make_searchable_combobox(customer_cb, customer_choices)
+        customer_entry.pack(fill=tk.X, ipady=6, pady=(3, 4))
+        attach_first_letter_caps(customer_entry)
+
+        customer_suggestion_host = tk.Frame(f, bg=C["bg"])
+        customer_suggestion_host.pack(fill=tk.X, pady=(0, 8))
+        customer_list = tk.Listbox(
+            customer_suggestion_host, height=5, font=("Segoe UI", 10), bg=C["card"], fg=C["text"],
+            selectbackground=C["teal"], selectforeground="white",
+            bd=0, highlightthickness=0, activestyle="none", exportselection=False,
+        )
 
         entries = {}
         for lbl, key, default in [
@@ -285,22 +308,82 @@ class MembershipFrame(tk.Frame):
             e.pack(fill=tk.X, ipady=6, pady=(3, 8))
             e.insert(0, default)
             entries[key] = e
+            if key == "name":
+                attach_first_letter_caps(e)
 
-        def _apply_customer_choice(event=None):
-            selected = customer_var.get().strip()
+        def _hide_customer_list():
+            customer_list.delete(0, tk.END)
+            customer_list.pack_forget()
+
+        def _apply_customer_choice(selected=None):
+            if selected is None:
+                sel = customer_list.curselection()
+                if not sel:
+                    return "break"
+                selected = customer_list.get(sel[0])
+            selected = str(selected or customer_var.get()).strip()
             if not selected:
-                return
+                return "break"
             if " - " in selected:
                 selected_name, selected_phone = selected.rsplit(" - ", 1)
             else:
                 selected_name, selected_phone = "", selected
             customer = customers_map.get(selected_phone, {})
+            customer_var.set(selected)
             entries["name"].delete(0, tk.END)
             entries["name"].insert(0, customer.get("name", selected_name))
             entries["phone"].delete(0, tk.END)
             entries["phone"].insert(0, selected_phone)
+            _hide_customer_list()
+            pkg_cb.focus_set()
+            return "break"
 
-        customer_cb.bind("<<ComboboxSelected>>", _apply_customer_choice)
+        def _refresh_customer_list(event=None):
+            if getattr(event, "keysym", "") in {"Up", "Down", "Return", "Escape", "Tab"}:
+                return
+            query = customer_var.get().strip().lower()
+            customer_list.delete(0, tk.END)
+            if not query:
+                _hide_customer_list()
+                return
+            starts = [choice for choice in customer_choices if choice.lower().startswith(query)]
+            contains = [choice for choice in customer_choices if query in choice.lower() and choice not in starts]
+            matches = (starts + contains)[:12]
+            if not matches:
+                _hide_customer_list()
+                return
+            for choice in matches:
+                customer_list.insert(tk.END, choice)
+            customer_list.selection_set(0)
+            customer_list.activate(0)
+            customer_list.configure(height=min(len(matches), 8))
+            if not customer_list.winfo_ismapped():
+                customer_list.pack(fill=tk.X)
+
+        def _move_customer_list(delta):
+            if customer_list.size() == 0:
+                _refresh_customer_list()
+            if customer_list.size() == 0:
+                return "break"
+            sel = customer_list.curselection()
+            idx = sel[0] if sel else 0
+            idx = max(0, min(customer_list.size() - 1, idx + delta))
+            customer_list.selection_clear(0, tk.END)
+            customer_list.selection_set(idx)
+            customer_list.activate(idx)
+            customer_list.see(idx)
+            return "break"
+
+        customer_entry.bind("<KeyRelease>", _refresh_customer_list)
+        customer_entry.bind("<Down>", lambda e: _move_customer_list(1))
+        customer_entry.bind("<Up>", lambda e: _move_customer_list(-1))
+        customer_entry.bind("<Return>", lambda e: _apply_customer_choice())
+        customer_entry.bind("<Escape>", lambda e: (_hide_customer_list(), "break")[-1])
+        customer_entry.bind("<FocusOut>", lambda e: win.after(150, _hide_customer_list))
+        customer_list.bind("<ButtonRelease-1>", lambda e: _apply_customer_choice())
+        customer_list.bind("<Double-Button-1>", lambda e: _apply_customer_choice())
+        customer_list.bind("<Return>", lambda e: _apply_customer_choice())
+        customer_list.bind("<Escape>", lambda e: (_hide_customer_list(), "break")[-1])
 
         tk.Label(f, text="Package:", bg=C["bg"],
                  fg=C["muted"], font=("Segoe UI", 12)).pack(anchor="w")
@@ -353,12 +436,17 @@ class MembershipFrame(tk.Frame):
             messagebox.showinfo("Done",
                                 f"{pkg} assigned to {nm}\nExpiry: {exp}")
 
-        ModernButton(f, text="Assign Package",
+        ModernButton(footer, text="Assign Package",
                      command=_save,
                      color=C["teal"], hover_color=C["blue"],
                      width=380, height=40, radius=8,
                      font=("Segoe UI", 11, "bold"),
-                     ).pack(fill=tk.X, pady=(8, 0))
+                     ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ModernButton(footer, text="Close", command=_close_dialog,
+                     color=C["sidebar"], hover_color=C["blue"],
+                     width=120, height=40, radius=8,
+                     font=("Segoe UI", 10, "bold"),
+                     ).pack(side=tk.RIGHT, padx=(10, 0))
         reveal_when_ready(win)
 
     def _get_selected_phone(self):
@@ -600,8 +688,8 @@ class MembershipFrame(tk.Frame):
                  font=("Segoe UI", 13, "bold"),
                  bg=C["bg"], fg=C["text"]).pack(pady=(15, 10))
 
-        f, _canvas, _container = make_scrollable(
-            win, bg=C["bg"], padx=30, pady=10)
+        f, footer, _canvas, _container = make_toplevel_scrollable_with_footer(
+            win, bg=C["bg"], footer_bg=C["card"], padx=30, pady=10)
 
         entries = {}
         for lbl, key, default in [
@@ -643,12 +731,17 @@ class MembershipFrame(tk.Frame):
             win.destroy()
             self._load_templates()
 
-        ModernButton(f, text="Save Template",
+        ModernButton(footer, text="Save Template",
                      command=_save,
                      color=C["teal"], hover_color=C["blue"],
                      width=380, height=38, radius=8,
                      font=("Segoe UI", 11, "bold"),
-                     ).pack(fill=tk.X, pady=(8, 0))
+                     ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ModernButton(footer, text="Close", command=lambda: (win.grab_release(), win.destroy()),
+                     color=C["sidebar"], hover_color=C["blue"],
+                     width=120, height=38, radius=8,
+                     font=("Segoe UI", 10, "bold"),
+                     ).pack(side=tk.RIGHT, padx=(10, 0))
         reveal_when_ready(win)
 
     def _del_template(self):
@@ -731,5 +824,3 @@ class MembershipFrame(tk.Frame):
 
     def refresh(self):
         self._load_members()
-
-

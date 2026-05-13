@@ -21,6 +21,21 @@ BASE_SETTINGS_TABS = [
 
 AI_TAB_DEF = ("ai", "AI Assistant")
 AI_INSERT_BEFORE_KEY = "advanced"
+REQUIRED_SIDEBAR_KEYS = ("dashboard", "billing", "settings")
+OPTIONAL_SIDEBAR_MODULES = [
+    ("customers", "Customers"),
+    ("appointments", "Appointments"),
+    ("membership", "Memberships"),
+    ("offers", "Offers"),
+    ("redeem_codes", "Redeem"),
+    ("cloud_sync", "Cloud Sync"),
+    ("staff", "Staff"),
+    ("inventory", "Inventory"),
+    ("expenses", "Expenses"),
+    ("whatsapp_bulk", "Bulk WhatsApp"),
+    ("reports", "Reports"),
+    ("closing_report", "Closing Report"),
+]
 
 
 @dataclass(frozen=True)
@@ -47,6 +62,21 @@ def settings_tab_defs(settings: Mapping | None = None) -> list[tuple[str, str]]:
 def optional_tab_plan(settings: Mapping | None = None) -> OptionalTabPlan:
     cfg = settings or DEFAULTS
     return OptionalTabPlan(ai_enabled=feature_enabled("ai_assistant", dict(cfg)))
+
+
+def optional_sidebar_module_defs() -> list[tuple[str, str]]:
+    return list(OPTIONAL_SIDEBAR_MODULES)
+
+
+def sidebar_module_enabled(settings: Mapping | None, key: str) -> bool:
+    if key in REQUIRED_SIDEBAR_KEYS:
+        return True
+    if key == "ai_assistant":
+        return feature_enabled("ai_assistant", dict(settings or DEFAULTS))
+    cfg = dict(settings or DEFAULTS)
+    raw = cfg.get("sidebar_module_visibility", {})
+    visibility = dict(raw) if isinstance(raw, Mapping) else {}
+    return bool(visibility.get(key, True))
 
 
 def advanced_feature_status_items(
@@ -81,4 +111,3 @@ def advanced_feature_status_items(
             "color": gold if premium_ready else muted,
         },
     ]
-

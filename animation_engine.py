@@ -120,8 +120,9 @@ class AnimationEngine:
             c = _lerp_color(from_hex, to_hex, t)
             try:
                 widget.configure(**{prop: c})
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.color] config failed: {e}")
         self._add(step, duration, ease_out_cubic)
 
     def width(self, widget, from_w: int, to_w: int,
@@ -132,8 +133,9 @@ class AnimationEngine:
             w = int(from_w + (to_w - from_w) * t)
             try:
                 widget.configure(width=w)
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.width] config failed: {e}")
         self._add(step, duration, ease, on_complete)
 
     def slide_in(self, widget, direction: str = "bottom",
@@ -157,24 +159,27 @@ class AnimationEngine:
                 y = int(start_y + (orig_y - start_y) * t)
                 try:
                     widget.place_configure(y=y)
-                except Exception:
-                    pass
+                except Exception as e:
+                    from utils import app_log
+                    app_log(f"[AnimationEngine.slide_in] y setup failed: {e}")
         elif direction == "top":
             start_y = orig_y - offset
             def step(t):
                 y = int(start_y + (orig_y - start_y) * t)
                 try:
                     widget.place_configure(y=y)
-                except Exception:
-                    pass
+                except Exception as e:
+                    from utils import app_log
+                    app_log(f"[AnimationEngine.slide_in] y slide failed: {e}")
         elif direction == "right":
             start_x = orig_x + offset
             def step(t):
                 x = int(start_x + (orig_x - start_x) * t)
                 try:
                     widget.place_configure(x=x)
-                except Exception:
-                    pass
+                except Exception as e:
+                    from utils import app_log
+                    app_log(f"[AnimationEngine.slide_in] x slide failed: {e}")
         else:
             return
 
@@ -200,8 +205,9 @@ class AnimationEngine:
                 if t >= 1.0:
                     try:
                         widget.configure(bg=color_off)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        from utils import app_log
+                        app_log(f"[AnimationEngine.pulse] off config failed: {e}")
                     if self._root:
                         self._root.after(80, lambda: _do_pulse(n - 1))
             self._add(restore, duration, linear)
@@ -230,13 +236,15 @@ class AnimationEngine:
                          (1 if frame_count[0] % 2 == 0 else -1))
             try:
                 widget.place_configure(x=orig_x + offset)
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.shake] place_configure failed: {e}")
             if t >= 1.0:
                 try:
                     widget.place_configure(x=orig_x)
-                except Exception:
-                    pass
+                except Exception as e:
+                    from utils import app_log
+                    app_log(f"[AnimationEngine.shake] restore place failed: {e}")
 
         self._add(step, duration, linear)
 
@@ -253,8 +261,9 @@ class AnimationEngine:
             val = from_val + (to_val - from_val) * t
             try:
                 label.configure(text=f"{prefix}{fmt.format(val)}{suffix}")
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.count_up] format failed: {e}")
         self._add(step, duration, ease)
 
     def smooth_drag(self, divider: tk.Widget, panel: tk.Widget,
@@ -287,20 +296,23 @@ class AnimationEngine:
             last_w[0] = new_w
             try:
                 panel.configure(width=new_w)
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.smooth_drag] config width failed: {e}")
 
         def on_enter(e):
             try:
                 divider.configure(bg="#0ea5e9")   # teal highlight
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.smooth_drag] enter config failed: {e}")
 
         def on_leave(e):
             try:
                 divider.configure(bg="#1e293b")   # sidebar color
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.smooth_drag] leave config failed: {e}")
 
         divider.bind("<B1-Motion>", on_drag)
         divider.bind("<Enter>",     on_enter)
@@ -318,14 +330,16 @@ class AnimationEngine:
         def dim(t):
             try:
                 old_frame.configure(bg=_lerp_color(bg, "#000000", t * 0.3))
-            except Exception:
-                pass
+            except Exception as e:
+                from utils import app_log
+                app_log(f"[AnimationEngine.page_transition] dim failed: {e}")
             if t >= 1.0:
                 try:
                     old_frame.pack_forget()
                     new_frame.pack(fill=tk.BOTH, expand=True)
-                except Exception:
-                    pass
+                except Exception as e:
+                    from utils import app_log
+                    app_log(f"[AnimationEngine.page_transition] flip failed: {e}")
 
         self._add(dim, duration // 2, ease_out_cubic,
                   on_complete=lambda: None)

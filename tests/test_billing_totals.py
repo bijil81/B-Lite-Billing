@@ -15,7 +15,14 @@ def test_subtotals_and_direct_discount_are_capped():
         discount_value=9999.0,
     )
 
-    assert totals.as_legacy_tuple() == (600.0, 250.0, 850.0, 850.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    # 9999 discount on total 850 is first pre-capped to 850 by min(total, ...),
+    # then the 90% combined-discount cap reduces it to 765 (90% of 850).
+    # grand_total = 850 - 765 = 85 (salon always keeps at least 10%).
+    assert totals.service_subtotal == 600.0
+    assert totals.product_subtotal == 250.0
+    assert totals.total == 850.0
+    assert totals.discount == pytest.approx(765.0, abs=0.05)
+    assert totals.grand_total == pytest.approx(85.0, abs=0.05)
 
 
 def test_membership_discount_applies_to_service_subtotal_only():
@@ -43,8 +50,12 @@ def test_points_use_remaining_amount_after_direct_and_membership_discount():
         customer_points=999,
     )
 
-    assert totals.points_discount == 350.0
-    assert totals.grand_total == 0.0
+    # total=500, discount=100, membership=45 (10% of 450 remaining).
+    # Combined discount before cap = 100+45+350 = 495 = 99%.
+    # 90% cap: max_allowed = 450. discounts scaled proportionally.
+    # grand_total must be at least 10% of 500 = 50.
+    assert totals.grand_total == pytest.approx(50.0, abs=0.10)
+    assert totals.grand_total >= 0.0
 
 
 def test_missing_customer_points_preserves_zero_discount_and_reports_missing_customer():

@@ -85,13 +85,30 @@ def report_tree_values(
     *,
     display_date: Callable[[str], str],
     currency: Callable[[Any], str],
-) -> tuple[str, str, str, str, str, str, str, str]:
+    include_paid_due: bool = False,
+) -> tuple[str, ...]:
     raw_date = str(row.get("date", ""))
     date_prefix = raw_date[:10]
     try:
         date_value = display_date(date_prefix) if date_prefix else raw_date
     except Exception:
         date_value = raw_date
+
+    if include_paid_due:
+        gross_inv = float(row.get("gross_invoice_total", row.get("total", 0.0)) or 0.0)
+        paid = float(row.get("paid_amount", row.get("total", 0.0)) or 0.0)
+        due = max(0.0, gross_inv - paid)
+        return (
+            date_value,
+            str(row.get("time", raw_date[11:16])),
+            str(row.get("invoice", "")),
+            str(row.get("name", "")),
+            str(row.get("phone", "")),
+            str(row.get("payment", "")),
+            currency(row.get("total", 0.0)),
+            currency(paid),
+            currency(due),
+        )
 
     return (
         date_value,

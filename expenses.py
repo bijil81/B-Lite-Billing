@@ -17,6 +17,7 @@ from utils import (C, load_json, save_json, safe_float,
                    now_str, today_str, month_str, app_log, popup_window)
 from date_helpers import attach_date_mask, display_to_iso_date, iso_to_display_date, today_display_str, validate_display_date
 from ui_theme import apply_treeview_column_alignment, ModernButton
+from ui_responsive import make_toplevel_scrollable_with_footer
 from src.blite_v6.app.window_lifecycle import hide_while_building, reveal_when_ready
 
 CATEGORIES = [
@@ -43,9 +44,16 @@ def _normalize_expense_date(raw: str) -> str:
         return raw
 
 def get_expenses() -> list:
+    from adapters.expenses_adapter import use_v5_expenses_db, get_expenses_legacy_map_v5
+    if use_v5_expenses_db():
+        return get_expenses_legacy_map_v5()
     return load_json(F_EXPENSES, [])
 
 def save_expenses(data: list) -> bool:
+    from adapters.expenses_adapter import use_v5_expenses_db, save_expenses_legacy_map_v5
+    if use_v5_expenses_db():
+        save_expenses_legacy_map_v5(data)
+        return True
     return save_json(F_EXPENSES, data)
 
 def get_revenue_for_period(from_d: str, to_d: str) -> float:
@@ -130,7 +138,7 @@ class ExpensesFrame(tk.Frame):
         top_band.grid_columnconfigure(0, weight=1)
         top_band.grid_columnconfigure(1, weight=0)
 
-        intro = tk.Frame(top_band, bg=C["card"], padx=18, pady=12, height=110)
+        intro = tk.Frame(top_band, bg=C["card"], padx=18, pady=12, height=124)
         intro.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         intro.grid_propagate(False)
         tk.Label(intro, text="Expenses Workspace",
@@ -140,7 +148,7 @@ class ExpensesFrame(tk.Frame):
                  bg=C["card"], fg=C["muted"],
                  font=("Arial", 10)).pack(anchor="w", pady=(4, 0))
 
-        self.cards = tk.Frame(top_band, bg=C["bg"], width=420, height=110)
+        self.cards = tk.Frame(top_band, bg=C["bg"], width=430, height=124)
         self.cards.grid(row=0, column=1, sticky="ne")
         self.cards.grid_propagate(False)
         self._build_cards()
@@ -369,10 +377,10 @@ class ExpensesFrame(tk.Frame):
 
             def _card(parent, label, value, color, *, big=False):
                 padx = 16
-                pady = 10 if big else 6
-                value_font = ("Arial", 14, "bold") if big else ("Arial", 10, "bold")
-                label_font = ("Arial", 10, "bold") if big else ("Arial", 8)
-                card = tk.Frame(parent, bg=color, padx=padx, pady=pady, height=60 if big else 48)
+                pady = 11 if big else 7
+                value_font = ("Arial", 13, "bold") if big else ("Arial", 10, "bold")
+                label_font = ("Arial", 9, "bold") if big else ("Arial", 8)
+                card = tk.Frame(parent, bg=color, padx=padx, pady=pady, height=68 if big else 52)
                 card.pack_propagate(False)
                 tk.Label(card, text=value, font=value_font,
                          bg=color, fg="white").pack(anchor="w")
@@ -573,10 +581,15 @@ class ExpensesFrame(tk.Frame):
 
         win = tk.Toplevel(self)
         hide_while_building(win)
-        popup_window(win, 700, 560)
+        popup_window(win, 720, 620)
         win.title("Edit Expense" if mode == "edit" else "Add Expense")
         win.configure(bg=C["bg"])
         win.transient(self.winfo_toplevel())
+        try:
+            win.minsize(560, 460)
+            win.resizable(True, True)
+        except Exception as e:
+            app_log(f"[_open_expense_popup] window sizing failed: {e}")
 
         def _close():
             try:
@@ -596,8 +609,9 @@ class ExpensesFrame(tk.Frame):
                  font=("Arial", 12, "bold")).pack(side=tk.LEFT)
         tk.Frame(win, bg=C["teal"], height=2).pack(fill=tk.X)
 
-        body = tk.Frame(win, bg=C["bg"], padx=18, pady=14)
-        body.pack(fill=tk.BOTH, expand=True)
+        body, footer, _canvas, _container = make_toplevel_scrollable_with_footer(
+            win, bg=C["bg"], padx=18, pady=14
+        )
 
         def _label(text):
             tk.Label(body, text=text, bg=C["bg"], fg=C["muted"],
@@ -649,8 +663,8 @@ class ExpensesFrame(tk.Frame):
         _label("Description:")
         desc_ent = _entry(record.get("description", ""))
 
-        actions = tk.Frame(body, bg=C["bg"])
-        actions.pack(fill=tk.X, pady=(16, 0))
+        actions = tk.Frame(footer, bg=C["bg"])
+        actions.pack(fill=tk.X)
 
         def _collect_form_values():
             raw_date = date_ent.get().strip() or today_display_str()

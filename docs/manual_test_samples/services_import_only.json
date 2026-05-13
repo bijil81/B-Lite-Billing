@@ -1,0 +1,139 @@
+{
+  "Services": {
+    "Treatments": {
+      "Under Eye": 400,
+      "Dandruff": 800,
+      "Hair Falling": 900,
+      "Lice": 1500,
+      "Pimple": 700,
+      "Pigmentation": 900
+    },
+    "Waxing": {
+      "Upper Lip": 40,
+      "Fore Head": 40,
+      "Chin": 50,
+      "Under Arm": 150,
+      "Cheeks": 50,
+      "1/2 Hand": 250,
+      "Full Hand": 400,
+      "1/2 Leg": 400,
+      "Full Leg": 800,
+      "Face Wax": 200,
+      "Full Body": 1500
+    },
+    "Head Massage": {
+      "Hot Oil": 400,
+      "Navarthna Oil": 500,
+      "Olive Oil": 800,
+      "Aroma Oil": 800,
+      "Almond Oil": 500,
+      "Hair Wash": 250
+    },
+    "Rica Wax (Flavor)": {
+      "Half Hand": 400,
+      "Full Hand": 600,
+      "Half Leg": 600,
+      "Full Leg": 1200,
+      "Full Body": 2000
+    },
+    "Rica Brazilian": {
+      "Under Arm": 200,
+      "Upper Lip": 50,
+      "Fore Head": 50,
+      "Chin": 50,
+      "Cheeks": 70,
+      "Full Face": 250
+    },
+    "Bridal": {
+      "Bridal Package": 5000,
+      "Party Makeup": 3000,
+      "Hair Do": 1500,
+      "Saree Draping": 500,
+      "Saree Folding": 400
+    },
+    "Nail Art": {
+      "One Hand": 1000,
+      "Both Hand": 2500,
+      "Nail Paint": 500
+    },
+    "Threading": {
+      "Eyebrow": 50,
+      "Upper Lip": 50,
+      "Chin": 50,
+      "Fore Head": 20,
+      "Side Face": 50,
+      "Full Face": 150
+    },
+    "Hair Ironing": {
+      "Shoulder Length": 700,
+      "Mid Length": 1000,
+      "Waist Length": 1500
+    },
+    "De Tan": {
+      "Face Detan": 400,
+      "Neck Detan": 400,
+      "Back Neck": 200,
+      "Eye Detan": 100,
+      "Full Hand": 700,
+      "Half Hand": 500,
+      "Full Leg": 1000,
+      "Half Leg": 700
+    },
+    "Bleaching": {
+      "Eye Bleach": 100,
+      "Neck Bleach": 200,
+      "Face Bleach": 200,
+      "Herbal Bleach": 250,
+      "Full Hand": 600,
+      "1/2 Hand": 400,
+      "Full Leg": 800
+    },
+    "Clean Up": {
+      "Clean Up": 350,
+      "Whitening": 700,
+      "Pappaya": 400,
+      "Diamond": 700,
+      "Pearl": 600,
+      "Platinum": 600,
+      "Wine": 500
+    },
+    "Hair Cut": {
+      "Front Cut": 100,
+      "Straight Cut": 200,
+      "Baby Cut": 150,
+      "U Cut": 300,
+      "Step Cut": 600,
+      "Layer Cut": 700,
+      "Creative Cut": 1000
+    },
+    "Hair Colouring": {
+      "Black Henna": 400,
+      "Matrix": 650,
+      "Loreal": 750,
+      "Streaking": 150,
+      "Global Colour": 4000,
+      "Blow Dry": 600
+    },
+    "Hair Spa": {
+      "Natures": 900,
+      "Matrix": 1000,
+      "Keratine": 1300,
+      "Loreal": 1700,
+      "Wella": 1800,
+      "Schwarzkopf": 2000
+    },
+    "Pedicure & Manicure": {
+      "Pedicure": 750,
+      "Crystal Pedicure": 800,
+      "Manicure": 400,
+      "Spa Manicure": 500
+    },
+    "Facial": {
+      "Fruit": 600,
+      "Wine": 950,
+      "Diamond": 1400,
+      "Hydra": 3500,
+      "Skin Whitening": 2500
+    }
+  }
+}

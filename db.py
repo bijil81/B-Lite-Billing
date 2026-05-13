@@ -46,14 +46,22 @@ _JSON_TO_KEY = {
     os.path.join(DATA_DIR, "redeem_codes.json"):    "redeem_codes",
     os.path.join(DATA_DIR, "users.json"):           "users",
     os.path.join(DATA_DIR, "salon_settings.json"):  "settings",
+    os.path.join(DATA_DIR, "print_settings.json"):  "print_settings",
     os.path.join(DATA_DIR, "invoice_counter.json"): "invoice_counter",
     os.path.join(DATA_DIR, "pkg_templates.json"):   "pkg_templates",
+    os.path.join(DATA_DIR, "sync_config.json"):     "sync_config",
+    os.path.join(DATA_DIR, "gdrive_config.json"):   "gdrive_config",
+    os.path.join(DATA_DIR, "offline_backup_config.json"): "offline_backup_config",
+    os.path.join(DATA_DIR, "scheduled_backup_config.json"): "scheduled_backup_config",
+    os.path.join(DATA_DIR, "inventory_import_batches.json"): "inventory_import_batches",
 }
 
 
 # ─────────────────────────────────────────────────────────
 #  CONNECTION  (thread-local, WAL mode)
 # ─────────────────────────────────────────────────────────
+
+import contextlib
 
 _local = threading.local()
 
@@ -77,6 +85,7 @@ def _open_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA busy_timeout = 5000")
     _create_schema(conn)
+    _migrate_sales_report_schema(conn)  # Safe additive migration for VOID columns
     return conn
 
 
@@ -88,9 +97,70 @@ def close_db():
             try:
                 from utils import app_log
                 app_log(f"[db close] {e}")
-            except Exception:
-                pass
+            except Exception as log_err:
+                print(f"[db close] {e} (logging also failed: {log_err})")
         _local.conn = None
+
+
+
+@contextlib.contextmanager
+def db_transaction():
+    """
+    Context manager for atomic database transactions.
+    Acquires a write lock immediately (BEGIN IMMEDIATE).
+    """
+    conn = get_db()
+    if getattr(_local, "in_transaction", False):
+        yield conn
+        return
+
+    _local.in_transaction = True
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        _local.in_transaction = False
+
+
+# ─────────────────────────────────────────────────────────
+#  SAFE ADDITIVE MIGRATION — VOID columns
+# ─────────────────────────────────────────────────────────
+
+def _migrate_sales_report_schema(conn: sqlite3.Connection):
+    """
+    Safe additive migration — adds VOID audit columns to the sales_report
+    table if they do not already exist. Never drops or recreates the table.
+    Safe to call on every startup.
+    """
+    existing_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(sales_report)").fetchall()
+    }
+    migrations = [
+        ("is_voided",   "ALTER TABLE sales_report ADD COLUMN is_voided  INTEGER DEFAULT 0"),
+        ("void_reason", "ALTER TABLE sales_report ADD COLUMN void_reason TEXT DEFAULT ''"),
+        ("void_at",     "ALTER TABLE sales_report ADD COLUMN void_at     TEXT DEFAULT ''"),
+        ("void_by",     "ALTER TABLE sales_report ADD COLUMN void_by     TEXT DEFAULT ''"),
+    ]
+    for col_name, sql in migrations:
+        if col_name not in existing_cols:
+            try:
+                conn.execute(sql)
+                _db_log(f"[migrate_schema] Added column sales_report.{col_name}", "info")
+            except Exception as e:
+                _db_log(f"[migrate_schema] Failed to add {col_name}: {e}")
+    # Add void index if missing
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sale_voided ON sales_report(is_voided)"
+        )
+    except Exception:
+        pass
+    conn.commit()
 
 
 # ─────────────────────────────────────────────────────────
@@ -201,15 +271,15 @@ def _create_schema(conn: sqlite3.Connection):
 
         -- Sales report (mirrors CSV)
         CREATE TABLE IF NOT EXISTS sales_report (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            date      TEXT NOT NULL,
-            invoice   TEXT DEFAULT '',
-            name      TEXT DEFAULT '',
-            phone     TEXT DEFAULT '',
-            payment   TEXT DEFAULT 'Cash',
-            total     REAL DEFAULT 0.0 CHECK(total >= 0),
-            discount  REAL DEFAULT 0.0 CHECK(discount >= 0),
-            items_raw TEXT DEFAULT ''
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            date       TEXT NOT NULL,
+            invoice    TEXT DEFAULT '',
+            name       TEXT DEFAULT '',
+            phone      TEXT DEFAULT '',
+            payment    TEXT DEFAULT 'Cash',
+            total      REAL DEFAULT 0.0 CHECK(total >= 0),
+            discount   REAL DEFAULT 0.0 CHECK(discount >= 0),
+            items_raw  TEXT DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_sale_date    ON sales_report(date);
         CREATE INDEX IF NOT EXISTS idx_sale_invoice ON sales_report(invoice);
@@ -325,8 +395,7 @@ def db_load(path: str, default=None):
     """
     Drop-in for load_json().
     1. Read from SQLite kv_store (fast)
-    2. Fallback to JSON file if not in DB
-    3. Return default if both fail
+    2. Return default if DB fails or key not found
     """
     if default is None:
         default = {}
@@ -355,27 +424,21 @@ def db_load(path: str, default=None):
                 return _normalize_payload(json.loads(row["value"]))
         except Exception as e:
             _db_log(f"[db_load] SQLite read failed for {key}: {e}")
-    # Fallback: JSON file
-    try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return _normalize_payload(json.load(f))
-    except Exception as e:
-        _db_log(f"[db_load] JSON fallback failed for {path}: {e}")
+    else:
+        _db_log(f"[db_load] No SQLite key mapping for path: {path}", "warning")
+
     return default
 
 
 def db_save(path: str, data) -> bool:
     """
     Drop-in for save_json().
-    Writes SQLite (primary) + JSON backup (atomic).
-    Returns True if at least one write succeeded.
+    Writes purely to SQLite.
+    Returns True if write succeeded, False otherwise.
     """
     key       = _JSON_TO_KEY.get(path)
     sqlite_ok = False
-    json_ok   = False
 
-    # SQLite write
     if key:
         try:
             serialised = json.dumps(data, ensure_ascii=False)
@@ -387,33 +450,18 @@ def db_save(path: str, data) -> bool:
                     value   = excluded.value,
                     updated = excluded.updated
             """, (key, serialised))
-            conn.commit()
+            
+            # Commit immediately only if not in a transaction
+            if not getattr(_local, "in_transaction", False):
+                conn.commit()
+
             sqlite_ok = True
         except Exception as e:
             _db_log(f"[db_save] SQLite write failed for {key}: {e}")
+    else:
+        _db_log(f"[db_save] No SQLite key mapping for path: {path}", "warning")
 
-    # JSON backup (atomic)
-    try:
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        if os.path.exists(path):
-            os.replace(tmp, path)
-        else:
-            os.rename(tmp, path)
-        json_ok = True
-    except Exception as e:
-        _db_log(f"[db_save] JSON backup failed for {path}: {e}")
-        try:
-            if os.path.exists(path + ".tmp"):
-                os.remove(path + ".tmp")
-        except Exception:
-            pass
-
-    return sqlite_ok or json_ok
+    return sqlite_ok
 
 
 # ─────────────────────────────────────────────────────────
@@ -549,8 +597,11 @@ def db_backup(backup_dir: str = None) -> str:
         bkp_conn = sqlite3.connect(dest)
         get_db().backup(bkp_conn)
         bkp_conn.close()
-    except Exception:
+    except Exception as e:
+        # SQLite online backup failed — falling back to file copy (less safe during writes)
+        _db_log(f"[db_backup] SQLite .backup() failed ({e}), falling back to shutil.copy2")
         shutil.copy2(DB_PATH, dest)
+
     _db_log(f"[db_backup] Backed up to {dest}", "info")
     return dest
 

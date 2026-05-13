@@ -17,7 +17,13 @@ from utils import (C, center_window, load_json, save_json,
                    attendance_open_session)
 from auth_security import verify_password
 from ui_theme import ModernButton
-from ui_responsive import make_toplevel_scrollable, get_responsive_metrics, scaled_value, fit_toplevel
+from ui_responsive import (
+    make_toplevel_scrollable,
+    make_toplevel_scrollable_with_footer,
+    get_responsive_metrics,
+    scaled_value,
+    fit_toplevel,
+)
 from icon_system import get_action_icon
 from src.blite_v6.app.window_lifecycle import hide_while_building, reveal_when_ready
 from branding import (
@@ -227,14 +233,19 @@ def auto_mark_attendance(username: str, event: str):
         try:
             from utils import app_log
             app_log(f"[auto_mark_attendance] {e}")
-        except Exception:
-            pass
+        except Exception as log_err:
+            print(f"[auto_mark_attendance] {e} (logging also failed: {log_err})")
+
 
 
 # ─────────────────────────────────────────
 #  USER HELPERS
 # ─────────────────────────────────────────
 def get_users() -> dict:
+    from adapters.auth_adapter import use_v5_users_db, get_users_legacy_map_v5
+    if use_v5_users_db():
+        return get_users_legacy_map_v5()
+    
     users = load_json(F_USERS, {})
     if isinstance(users, dict):
         return users
@@ -242,6 +253,10 @@ def get_users() -> dict:
     return {}
 
 def _save_users(u: dict) -> bool:
+    from adapters.auth_adapter import use_v5_users_db, save_users_legacy_map_v5
+    if use_v5_users_db():
+        save_users_legacy_map_v5(u)
+        return True
     return save_json(F_USERS, u)
 
 
@@ -397,8 +412,9 @@ def show_first_run_setup():
             cfg = get_settings()
             cfg["last_user"] = username
             save_settings(cfg)
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[show_first_run_setup] Failed to save last_user setting: {e}")
+
         messagebox.showinfo("Setup Complete",
             f"Owner account '{username}' created.\n\n"
             f"You can now add staff/users from the Admin panel after login.")
@@ -470,18 +486,19 @@ class LoginWindow:
         if self._lockout_after_id:
             try:
                 self.win.after_cancel(self._lockout_after_id)
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[LoginWindow._close_window] after_cancel failed: {e}")
             self._lockout_after_id = None
         self.logged_in_user = None
         try:
             self.win.quit()
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[LoginWindow._close_window] win.quit() failed: {e}")
         try:
             self.win.destroy()
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[LoginWindow._close_window] win.destroy() failed: {e}")
+
 
     def _build(self):
         # Top brand
@@ -496,7 +513,8 @@ class LoginWindow:
             h = 70; w = int(img.size[0] * h / img.size[1])
             self._logo = ImageTk.PhotoImage(img.resize((w, h)))
             tk.Label(top, image=self._logo, bg=C["sidebar"]).pack()
-        except Exception:
+        except Exception as e:
+            app_log(f"[LoginWindow._build] Logo load failed, using text fallback: {e}")
             tk.Label(top, text=get_short_name().upper(),
                      font=("Arial", 22, "bold"),
                      bg=C["sidebar"], fg=C["accent"]).pack()
@@ -548,8 +566,9 @@ class LoginWindow:
         self._show_login_password = tk.BooleanVar(value=False)
         try:
             self._show_login_password.trace_add("write", self._on_toggle_login_password)
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[LoginWindow._build] trace_add for show_password failed: {e}")
+
         self._show_login_password_cb = tk.Checkbutton(
             opt_row,
             text="Show Password",
@@ -607,8 +626,9 @@ class LoginWindow:
             self.p_ent.configure(show="" if self._show_login_password.get() else "*")
             self.p_ent.configure(fg=C["text"], insertbackground=C["accent"])
             self.p_ent.update_idletasks()
-        except Exception:
-            pass
+        except Exception as e:
+            app_log(f"[LoginWindow._apply_login_password_visibility] {e}")
+
 
     def _toggle_login_password(self):
         self._apply_login_password_visibility()
@@ -644,8 +664,9 @@ class LoginWindow:
         if self._lockout_after_id:
             try:
                 self.win.after_cancel(self._lockout_after_id)
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[LoginWindow._schedule_lockout_refresh] after_cancel failed: {e}")
+
         self._lockout_after_id = self.win.after(1000, self._refresh_lockout_state)
 
     def _refresh_lockout_state(self, *_args):
@@ -668,8 +689,9 @@ class LoginWindow:
         if self._lockout_after_id:
             try:
                 self.win.after_cancel(self._lockout_after_id)
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[LoginWindow._refresh_lockout_state] after_cancel failed: {e}")
+
             self._lockout_after_id = None
         if hasattr(self, "err") and "Too many failed attempts" in self.err.cget("text"):
             self._set_login_feedback("")
@@ -707,8 +729,9 @@ class LoginWindow:
                 cfg = get_settings()
                 cfg["last_user"] = u
                 save_settings(cfg)
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[LoginWindow._login] Failed to save last_user setting: {e}")
+
             # Auto-mark attendance: Present + In Time on login
             auto_mark_attendance(u, "login")
 
@@ -721,20 +744,27 @@ class LoginWindow:
                     entity_id=u,
                     user=u,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[LoginWindow._login] activity log (login_success) failed: {e}")
+
 
             self.logged_in_user = user
             try:
                 self.win.quit()
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[LoginWindow._login] win.quit() failed: {e}")
             try:
                 self.win.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[LoginWindow._login] win.destroy() failed: {e}")
+
         else:
-            register_login_failure(u)
+            # BUG FIX (2026-05-10): register_login_failure() was called TWICE —
+            # once silently on line 762 and again on line 777 to get the message.
+            # This double-counted every failure so lockout triggered after ~3
+            # wrong passwords instead of the configured 5.
+            # Fix: call once, capture the returned message, reuse it for feedback.
+            _failure_msg = register_login_failure(u)
 
             # V5.6.1 Phase 1 — Activity log
             try:
@@ -745,10 +775,10 @@ class LoginWindow:
                     entity_id=u,
                     details={"reason": "invalid_credentials"},
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                app_log(f"[LoginWindow._login] activity log (login_failed) failed: {e}")
 
-            self._set_login_feedback(register_login_failure(u))
+            self._set_login_feedback(_failure_msg)
             self._refresh_lockout_state()
             self._apply_login_password_visibility()
             self.p_ent.focus_set()
@@ -758,9 +788,9 @@ class LoginWindow:
 #  USER MANAGEMENT  (called from admin panel)
 # ─────────────────────────────────────────
 class UserManagerWindow:
-    def __init__(self, parent, current_user: dict):
+    def __init__(self, parent, current_user: dict, on_users_changed=None):
         self.current_user = current_user
-        self._show_user_password = tk.BooleanVar(value=False)
+        self.on_users_changed = on_users_changed
         self._responsive = get_responsive_metrics(parent.winfo_toplevel())
 
         win = tk.Toplevel(parent)
@@ -786,12 +816,12 @@ class UserManagerWindow:
                  bg=C["sidebar"], fg=C["text"]).pack(side=tk.LEFT)
         tk.Frame(win, bg=C["teal"], height=2).pack(fill=tk.X)
 
-        body, _canvas, _container = make_toplevel_scrollable(
+        body, footer, _canvas, _container = make_toplevel_scrollable_with_footer(
             win, bg=C["bg"], padx=15, pady=10
         )
 
         cols = ("Username", "Name", "Role", "Status")
-        self.tree = ttk.Treeview(body, columns=cols, show="headings", height=10)
+        self.tree = ttk.Treeview(body, columns=cols, show="headings", height=14)
         self._tree_cols = cols
         for col in cols:
             self.tree.heading(col, text=col)
@@ -799,67 +829,42 @@ class UserManagerWindow:
         self.tree.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         body.bind("<Configure>", self._resize_user_columns, add="+")
 
-        # Form
-        frm = tk.Frame(body, bg=C["card"], padx=15, pady=10)
-        frm.pack(fill=tk.X, pady=(0, 5))
-
-        for col in range(4):
-            frm.grid_columnconfigure(col, weight=1)
-        self.ents = {}
-        self.ents["user"] = tk.Entry(
-            frm, font=("Arial", 12), bg=C["input"], fg=C["text"], bd=0)
-        self.ents["name"] = tk.Entry(
-            frm, font=("Arial", 12), bg=C["input"], fg=C["text"], bd=0)
-        self.ents["pass"] = tk.Entry(
-            frm, font=("Arial", 12), bg=C["input"], fg=C["text"], bd=0, show="*")
-        self.role_var = tk.StringVar(value="staff")
-        role_cb = ttk.Combobox(
-            frm, textvariable=self.role_var,
-            values=["owner", "manager", "receptionist", "staff"],
-            state="readonly")
-        field_specs = [
-            ("Username:", self.ents["user"], 0, 0),
-            ("Display Name:", self.ents["name"], 0, 2),
-            ("Password:", self.ents["pass"], 1, 0),
-            ("Role:", role_cb, 1, 2),
-        ]
-        for lbl, widget, row, col in field_specs:
-            tk.Label(frm, text=lbl, bg=C["card"], fg=C["muted"],
-                     font=("Arial", 11)).grid(
-                         row=row, column=col, padx=(8, 6), pady=6, sticky="w")
-            widget.grid(row=row, column=col + 1, padx=(0, 8), pady=6,
-                        ipady=3, sticky="ew")
-        tk.Checkbutton(
-            frm,
-            text="Show Password",
-            variable=self._show_user_password,
-            command=lambda: self.ents["pass"].config(
-                show="" if self._show_user_password.get() else "*"
-            ),
-            bg=C["card"],
-            fg=C["muted"],
-            selectcolor=C["input"],
-            font=("Arial", 10),
-        ).grid(row=2, column=1, padx=(0, 8), pady=(0, 4), sticky="w")
-
         # Buttons
-        bb = tk.Frame(body, bg=C["bg"])
-        bb.pack(fill=tk.X, pady=(0, 10))
+        bb = tk.Frame(footer, bg=C["bg"])
+        bb.pack(fill=tk.X)
 
-        for txt, clr, hclr, cmd in [
-            ("Add User",   C["teal"],   C["blue"],   self._add),
-            ("Reset Pass", C["blue"],   "#154360",   self._reset_pass),
-            ("Deactivate", C["orange"], "#d35400",   self._deactivate),
-            ("Delete",     C["red"],    "#c0392b",   self._delete),
-        ]:
-            ModernButton(bb, text=txt, command=cmd,
-                         color=clr, hover_color=hclr,
-                         width=scaled_value(126, 118, 96), height=scaled_value(34, 32, 28), radius=8,
-                         font=("Arial",scaled_value(10, 10, 9),"bold"),
-                         ).pack(side=tk.LEFT, padx=3)
+        self._add_user_btn = ModernButton(
+            bb, text="Add User", command=self._add,
+            color=C["teal"], hover_color=C["blue"],
+            width=scaled_value(126, 118, 96), height=scaled_value(34, 32, 28), radius=8,
+            font=("Arial",scaled_value(10, 10, 9),"bold"),
+        )
+        self._add_user_btn.pack(side=tk.LEFT, padx=3)
+        self._reset_pass_btn = ModernButton(
+            bb, text="Reset Pass", command=self._reset_pass,
+            color=C["blue"], hover_color="#154360",
+            width=scaled_value(126, 118, 96), height=scaled_value(34, 32, 28), radius=8,
+            font=("Arial",scaled_value(10, 10, 9),"bold"),
+        )
+        self._reset_pass_btn.pack(side=tk.LEFT, padx=3)
+        self._user_active_btn = ModernButton(
+            bb, text="Deactivate", command=self._deactivate,
+            color=C["orange"], hover_color="#d35400",
+            width=scaled_value(126, 118, 96), height=scaled_value(34, 32, 28), radius=8,
+            font=("Arial",scaled_value(10, 10, 9),"bold"),
+        )
+        self._user_active_btn.pack(side=tk.LEFT, padx=3)
+        self._delete_user_btn = ModernButton(
+            bb, text="Delete", command=self._delete,
+            color=C["red"], hover_color="#c0392b",
+            width=scaled_value(126, 118, 96), height=scaled_value(34, 32, 28), radius=8,
+            font=("Arial",scaled_value(10, 10, 9),"bold"),
+        )
+        self._delete_user_btn.pack(side=tk.LEFT, padx=3)
 
         self._load()
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        self._update_user_action_buttons()
         reveal_when_ready(win)
 
     def _resize_user_columns(self, event=None):
@@ -892,59 +897,222 @@ class UserManagerWindow:
             status = "Active" if u.get("active", True) else "Inactive"
             self.tree.insert("", tk.END, values=(uname, u.get("name",""), u.get("role",""), status))
 
+    def _notify_users_changed(self):
+        try:
+            if callable(self.on_users_changed):
+                self.on_users_changed()
+        except Exception as e:
+            app_log(f"[UserManagerWindow._notify_users_changed] {e}")
+
     def _clear_form(self):
-        for key in ("user", "name", "pass"):
-            self.ents[key].delete(0, tk.END)
-        self.role_var.set("staff")
-        self._show_user_password.set(False)
-        self.ents["pass"].config(show="*")
         for item in self.tree.selection():
             self.tree.selection_remove(item)
-        self.ents["user"].focus_set()
 
     def _on_select(self, e=None):
-        sel = self.tree.selection()
-        if not sel: return
-        v = self.tree.item(sel[0], "values")
-        self.ents["user"].delete(0, tk.END); self.ents["user"].insert(0, v[0])
-        self.ents["name"].delete(0, tk.END); self.ents["name"].insert(0, v[1])
-        self.role_var.set(v[2])
+        self._update_user_action_buttons()
+
+    def _update_user_action_buttons(self):
+        try:
+            if not hasattr(self, "_user_active_btn"):
+                return
+            sel = self.tree.selection()
+            if not sel:
+                self._user_active_btn.set_text("Deactivate")
+                self._user_active_btn.set_color(C["orange"], "#d35400")
+                return
+            values = self.tree.item(sel[0], "values")
+            status = str(values[3] if len(values) > 3 else "").strip().lower()
+            if status == "inactive":
+                self._user_active_btn.set_text("Activate")
+                self._user_active_btn.set_color(C["green"], C["teal"])
+            else:
+                self._user_active_btn.set_text("Deactivate")
+                self._user_active_btn.set_color(C["orange"], "#d35400")
+        except Exception as e:
+            app_log(f"[UserManagerWindow._update_user_action_buttons] {e}")
 
     def _add(self):
         if self._deny_users(): return
-        u  = self.ents["user"].get().strip().lower()
-        nm = self.ents["name"].get().strip()
-        pw = self.ents["pass"].get().strip()
-        rl = self.role_var.get()
+        self._open_add_user_dialog()
+
+    def _open_add_user_dialog(self):
+        win = tk.Toplevel(self.tree.winfo_toplevel())
+        hide_while_building(win)
+        win.title("Add User")
+        popup_window(win, 600, 430)
+        win.configure(bg=C["bg"])
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", lambda: (win.grab_release(), win.destroy()))
+
+        dh = tk.Frame(win, bg=C["sidebar"], padx=16, pady=10)
+        dh.pack(fill=tk.X)
+        tk.Label(dh, text="Add New User", font=("Arial", 13, "bold"),
+                 bg=C["sidebar"], fg=C["text"]).pack(side=tk.LEFT)
+        tk.Frame(win, bg=C["teal"], height=2).pack(fill=tk.X)
+
+        frm = tk.Frame(win, bg=C["card"], padx=18, pady=14)
+        frm.pack(fill=tk.BOTH, expand=True, padx=14, pady=14)
+        frm.grid_columnconfigure(1, weight=1)
+
+        entries = {}
+        entries["user"] = tk.Entry(frm, font=("Arial", 12), bg=C["input"], fg=C["text"], bd=0)
+        entries["name"] = tk.Entry(frm, font=("Arial", 12), bg=C["input"], fg=C["text"], bd=0)
+        entries["pass"] = tk.Entry(frm, font=("Arial", 12), bg=C["input"], fg=C["text"], bd=0, show="*")
+        entries["confirm"] = tk.Entry(frm, font=("Arial", 12), bg=C["input"], fg=C["text"], bd=0, show="*")
+        role_var = tk.StringVar(value="staff")
+        role_cb = ttk.Combobox(
+            frm, textvariable=role_var,
+            values=["owner", "manager", "receptionist", "staff"],
+            state="readonly",
+        )
+
+        for row, (label, widget) in enumerate([
+            ("Username:", entries["user"]),
+            ("Display Name:", entries["name"]),
+            ("Password:", entries["pass"]),
+            ("Confirm Password:", entries["confirm"]),
+            ("Role:", role_cb),
+        ]):
+            tk.Label(frm, text=label, bg=C["card"], fg=C["muted"],
+                     font=("Arial", 11)).grid(row=row, column=0, padx=(0, 10), pady=7, sticky="w")
+            widget.grid(row=row, column=1, padx=(0, 0), pady=5, ipady=4, sticky="ew")
+
+        show_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            frm,
+            text="Show Password",
+            variable=show_var,
+            command=lambda: [
+                entries["pass"].config(show="" if show_var.get() else "*"),
+                entries["confirm"].config(show="" if show_var.get() else "*"),
+            ],
+            bg=C["card"],
+            fg=C["muted"],
+            selectcolor=C["input"],
+            font=("Arial", 10),
+        ).grid(row=5, column=1, pady=(0, 4), sticky="w")
+
+        btn_row = tk.Frame(frm, bg=C["card"])
+        btn_row.grid(row=6, column=0, columnspan=2, sticky="e", pady=(12, 0))
+
+        def _save():
+            u = entries["user"].get().strip().lower()
+            nm = entries["name"].get().strip()
+            pw = entries["pass"].get().strip()
+            confirm_pw = entries["confirm"].get().strip()
+            rl = role_var.get()
+            if pw != confirm_pw:
+                messagebox.showerror("Error", "Password and Confirm Password do not match.", parent=win)
+                return
+            if self._create_user(u, nm, pw, rl, parent=win):
+                win.grab_release()
+                win.destroy()
+
+        ModernButton(btn_row, text="Save", command=_save,
+                     color=C["teal"], hover_color=C["blue"],
+                     width=110, height=34, radius=8,
+                     font=("Arial", 10, "bold")).pack(side=tk.RIGHT, padx=(6, 0))
+        ModernButton(btn_row, text="Cancel", command=lambda: (win.grab_release(), win.destroy()),
+                     color=C["sidebar"], hover_color=C["blue"],
+                     width=100, height=34, radius=8,
+                     font=("Arial", 10, "bold")).pack(side=tk.RIGHT)
+
+        entries["user"].focus_set()
+        reveal_when_ready(win)
+
+    def _create_user(self, u: str, nm: str, pw: str, rl: str, parent=None) -> bool:
         if not u or not nm or not pw:
-            messagebox.showerror("Error", "Fill all fields."); return
+            messagebox.showerror("Error", "Fill all fields.", parent=parent); return False
         users = get_users()
         if u in users:
-            messagebox.showerror("Error", "Username already exists."); return
+            messagebox.showerror("Error", "Username already exists.", parent=parent); return False
         users[u] = {"password": hash_pw(pw), "role": rl, "name": nm, "active": True}
         if not _save_users(users):
-            messagebox.showerror("Error", "User could not be saved."); return
+            messagebox.showerror("Error", "User could not be saved.", parent=parent); return False
         self._sync_staff_record(u, nm, rl, active=True)
         self._load()
+        self._notify_users_changed()
         self._clear_form()
-        messagebox.showinfo("Done", f"User '{u}' created!")
+        messagebox.showinfo("Done", f"User '{u}' created!", parent=parent)
+        return True
 
     def _reset_pass(self):
         if self._deny_users(): return
         sel = self.tree.selection()
         if not sel: messagebox.showerror("Error","Select a user."); return
         uname = self.tree.item(sel[0], "values")[0]
-        pw    = self.ents["pass"].get().strip()
-        if len(pw) < 8:
-            messagebox.showerror("Error","Enter new password (min 8 chars)."); return
-        if not messagebox.askyesno("Confirm Reset", f"Reset password for '{uname}'?"):
-            return
-        users = get_users()
-        if uname in users:
-            users[uname]["password"] = hash_pw(pw)
-            if not _save_users(users):
-                messagebox.showerror("Error", "Password could not be saved."); return
-            messagebox.showinfo("Done", f"Password reset for '{uname}'.")
+        win = tk.Toplevel(self.tree.winfo_toplevel())
+        hide_while_building(win)
+        win.title("Reset Password")
+        popup_window(win, 500, 310)
+        win.configure(bg=C["bg"])
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", lambda: (win.grab_release(), win.destroy()))
+
+        dh = tk.Frame(win, bg=C["sidebar"], padx=16, pady=10)
+        dh.pack(fill=tk.X)
+        tk.Label(dh, text=f"Reset Password: {uname}", font=("Arial", 12, "bold"),
+                 bg=C["sidebar"], fg=C["text"]).pack(side=tk.LEFT)
+        tk.Frame(win, bg=C["teal"], height=2).pack(fill=tk.X)
+
+        frm = tk.Frame(win, bg=C["card"], padx=18, pady=16)
+        frm.pack(fill=tk.BOTH, expand=True, padx=14, pady=14)
+        frm.grid_columnconfigure(1, weight=1)
+
+        tk.Label(frm, text="New Password:", bg=C["card"], fg=C["muted"],
+                 font=("Arial", 11)).grid(row=0, column=0, padx=(0, 10), pady=7, sticky="w")
+        pass_entry = tk.Entry(frm, font=("Arial", 12), bg=C["input"], fg=C["text"], bd=0, show="*")
+        pass_entry.grid(row=0, column=1, pady=7, ipady=4, sticky="ew")
+        tk.Label(frm, text="Confirm Password:", bg=C["card"], fg=C["muted"],
+                 font=("Arial", 11)).grid(row=1, column=0, padx=(0, 10), pady=7, sticky="w")
+        confirm_entry = tk.Entry(frm, font=("Arial", 12), bg=C["input"], fg=C["text"], bd=0, show="*")
+        confirm_entry.grid(row=1, column=1, pady=7, ipady=4, sticky="ew")
+        show_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            frm,
+            text="Show Password",
+            variable=show_var,
+            command=lambda: [
+                pass_entry.config(show="" if show_var.get() else "*"),
+                confirm_entry.config(show="" if show_var.get() else "*"),
+            ],
+            bg=C["card"],
+            fg=C["muted"],
+            selectcolor=C["input"],
+            font=("Arial", 10),
+        ).grid(row=2, column=1, sticky="w")
+
+        btn_row = tk.Frame(frm, bg=C["card"])
+        btn_row.grid(row=3, column=0, columnspan=2, sticky="e", pady=(18, 0))
+
+        def _save():
+            pw = pass_entry.get().strip()
+            confirm_pw = confirm_entry.get().strip()
+            if len(pw) < 8:
+                messagebox.showerror("Error","Enter new password (min 8 chars).", parent=win); return
+            if pw != confirm_pw:
+                messagebox.showerror("Error", "Password and Confirm Password do not match.", parent=win); return
+            if not messagebox.askyesno("Confirm Reset", f"Reset password for '{uname}'?", parent=win):
+                return
+            users = get_users()
+            if uname in users:
+                users[uname]["password"] = hash_pw(pw)
+                if not _save_users(users):
+                    messagebox.showerror("Error", "Password could not be saved.", parent=win); return
+                win.grab_release()
+                win.destroy()
+                messagebox.showinfo("Done", f"Password reset for '{uname}'.")
+
+        ModernButton(btn_row, text="Save", command=_save,
+                     color=C["blue"], hover_color="#154360",
+                     width=110, height=34, radius=8,
+                     font=("Arial", 10, "bold")).pack(side=tk.RIGHT, padx=(6, 0))
+        ModernButton(btn_row, text="Cancel", command=lambda: (win.grab_release(), win.destroy()),
+                     color=C["sidebar"], hover_color=C["blue"],
+                     width=100, height=34, radius=8,
+                     font=("Arial", 10, "bold")).pack(side=tk.RIGHT)
+        pass_entry.focus_set()
+        reveal_when_ready(win)
 
     def _deactivate(self):
         if self._deny_users(): return
@@ -959,6 +1127,21 @@ class UserManagerWindow:
             _save_users(users)
             self._sync_staff_active(uname, users[uname].get("name", ""), users[uname].get("active", True))
             self._load()
+            self._select_user_row(uname)
+            self._update_user_action_buttons()
+            self._notify_users_changed()
+
+    def _select_user_row(self, username: str):
+        username = str(username or "").strip().lower()
+        if not username:
+            return
+        for item_id in self.tree.get_children():
+            values = self.tree.item(item_id, "values")
+            if values and str(values[0]).strip().lower() == username:
+                self.tree.selection_set(item_id)
+                self.tree.focus(item_id)
+                self.tree.see(item_id)
+                return
 
     def _delete(self):
         if self._deny_users(): return
@@ -970,10 +1153,22 @@ class UserManagerWindow:
         if messagebox.askyesno("Delete", f"Delete user '{uname}'?"):
             users = get_users()
             removed = users.get(uname, {})
-            users.pop(uname, None)
-            _save_users(users)
+            deleted = False
+            try:
+                from adapters.auth_adapter import use_v5_users_db, delete_user_v5
+                if use_v5_users_db():
+                    delete_user_v5(uname)
+                    deleted = True
+            except Exception as e:
+                app_log(f"[user delete v5] {e}")
+            if not deleted:
+                users.pop(uname, None)
+                _save_users(users)
             self._remove_staff_record(uname, removed.get("name", ""))
             self._load()
+            self._clear_form()
+            self._update_user_action_buttons()
+            self._notify_users_changed()
 
     def _sync_staff_record(self, username: str, display_name: str, role: str, active: bool = True):
         role_key = str(role or "").strip().lower()
@@ -982,20 +1177,41 @@ class UserManagerWindow:
         try:
             from staff import get_staff, save_staff
             staff_data = get_staff()
+            users = get_users()
             existing_key = None
+            username_norm = username.strip().lower()
+            display_norm = display_name.strip().lower()
+            duplicate_display = sum(
+                1 for uname, urec in users.items()
+                if str(uname).strip().lower() != username_norm
+                and str(urec.get("name", "")).strip().lower() == display_norm
+            ) > 0
             for key, rec in staff_data.items():
-                if key.strip().lower() == display_name.strip().lower():
+                if str(rec.get("username", "")).strip().lower() == username_norm:
                     existing_key = key
                     break
+            if existing_key is None:
+                for key, rec in staff_data.items():
+                    rec_username = str(rec.get("username", "")).strip().lower()
+                    can_claim_legacy_name = (
+                        not rec_username
+                        and (not duplicate_display or username_norm == display_norm)
+                    )
+                    if key.strip().lower() == display_norm and (rec_username == username_norm or can_claim_legacy_name):
+                        existing_key = key
+                        break
             staff_key = existing_key or display_name
+            if not existing_key and staff_key in staff_data:
+                staff_key = f"{display_name} ({username})"
             current = staff_data.get(staff_key, {})
             staff_data[staff_key] = {
-                "role": current.get("role") or role.title(),
+                "role": role.title(),
                 "phone": current.get("phone", ""),
                 "commission_pct": current.get("commission_pct", 0),
                 "salary": current.get("salary", 0),
                 "join_date": current.get("join_date") or today_str(),
                 "active": active,
+                "inactive": not bool(active),
                 "attendance": current.get("attendance", []),
                 "sales": current.get("sales", []),
                 "username": username,
@@ -1008,13 +1224,37 @@ class UserManagerWindow:
         try:
             from staff import get_staff, save_staff
             staff_data = get_staff()
+            users = get_users()
+            username_norm = username.strip().lower()
+            display_norm = display_name.strip().lower()
+            duplicate_display = sum(
+                1 for uname, urec in users.items()
+                if str(uname).strip().lower() != username_norm
+                and str(urec.get("name", "")).strip().lower() == display_norm
+            ) > 0
+            matched_key = None
             for key, rec in staff_data.items():
-                if key.strip().lower() == display_name.strip().lower() or str(rec.get("username", "")).strip().lower() == username.strip().lower():
-                    rec["active"] = active
-                    rec["username"] = username
-                    staff_data[key] = rec
-                    save_staff(staff_data)
-                    return
+                if str(rec.get("username", "")).strip().lower() == username_norm:
+                    matched_key = key
+                    break
+            if matched_key is None:
+                for key, rec in staff_data.items():
+                    rec_username = str(rec.get("username", "")).strip().lower()
+                    can_claim_legacy_name = (
+                        not rec_username
+                        and (not duplicate_display or username_norm == display_norm)
+                    )
+                    if key.strip().lower() == display_norm and (rec_username == username_norm or can_claim_legacy_name):
+                        matched_key = key
+                        break
+            if matched_key:
+                rec = staff_data.get(matched_key, {})
+                rec["active"] = active
+                rec["inactive"] = not bool(active)
+                rec["username"] = username
+                staff_data[matched_key] = rec
+                save_staff(staff_data)
+                return
         except Exception as e:
             app_log(f"[user->staff sync active] {e}")
 
@@ -1022,11 +1262,29 @@ class UserManagerWindow:
         try:
             from staff import get_staff, save_staff
             staff_data = get_staff()
+            users = get_users()
             remove_key = None
+            username_norm = username.strip().lower()
+            display_norm = display_name.strip().lower()
+            duplicate_display = sum(
+                1 for uname, urec in users.items()
+                if str(uname).strip().lower() != username_norm
+                and str(urec.get("name", "")).strip().lower() == display_norm
+            ) > 0
             for key, rec in staff_data.items():
-                if key.strip().lower() == display_name.strip().lower() or str(rec.get("username", "")).strip().lower() == username.strip().lower():
+                if str(rec.get("username", "")).strip().lower() == username_norm:
                     remove_key = key
                     break
+            if remove_key is None:
+                for key, rec in staff_data.items():
+                    rec_username = str(rec.get("username", "")).strip().lower()
+                    can_claim_legacy_name = (
+                        not rec_username
+                        and (not duplicate_display or username_norm == display_norm)
+                    )
+                    if key.strip().lower() == display_norm and (rec_username == username_norm or can_claim_legacy_name):
+                        remove_key = key
+                        break
             if remove_key:
                 staff_data.pop(remove_key, None)
                 save_staff(staff_data)

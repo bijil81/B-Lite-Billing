@@ -67,6 +67,7 @@ hidden = [
     'repositories.users_repo',
     'services_v5', 'services_v5.appointment_service', 'services_v5.attendance_service',
     'services_v5.auth_service', 'services_v5.billing_service',
+    'services_v5.credit_service',
     'services_v5.customer_service', 'services_v5.inventory_service',
     'services_v5.membership_service', 'services_v5.offers_service',
     'services_v5.product_catalog_service', 'services_v5.report_service',
@@ -121,7 +122,7 @@ a = Analysis(
     hookspath=[],
     runtime_hooks=[],
     excludes=[
-        'matplotlib', 'numpy', 'pandas', 'scipy',
+        'pandas', 'scipy',
         'IPython', 'jupyter', 'test', 'tests', 'pytest', '_pytest',
         'unittest', 'openpyxl.tests',
         # SECURITY: Admin-only tools must NOT ship in production.

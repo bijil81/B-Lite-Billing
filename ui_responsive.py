@@ -19,6 +19,37 @@ btn_h = _RESPONSIVE_DEFAULTS["btn_h"]
 font_sz = _RESPONSIVE_DEFAULTS["font_sz"]
 row_h = _RESPONSIVE_DEFAULTS["row_h"]
 padding = _RESPONSIVE_DEFAULTS["padding"]
+manual_ui_scale = 1.0
+
+
+def _normalize_manual_scale(value) -> float:
+    try:
+        scale = float(value)
+    except Exception:
+        scale = 1.0
+    return max(0.85, min(1.25, scale))
+
+
+def set_manual_ui_scale(value) -> float:
+    global manual_ui_scale
+    manual_ui_scale = _normalize_manual_scale(value)
+    return manual_ui_scale
+
+
+def get_manual_ui_scale() -> float:
+    return manual_ui_scale
+
+
+def _load_manual_ui_scale() -> float:
+    try:
+        from salon_settings import get_settings
+        return set_manual_ui_scale(get_settings().get("ui_scale", 1.0))
+    except Exception:
+        return manual_ui_scale
+
+
+def _apply_manual_scale(value: int | float) -> int:
+    return max(1, int(round(float(value) * manual_ui_scale)))
 
 
 def compute_responsive_metrics(sw: int, sh: int):
@@ -76,6 +107,7 @@ def initialize_responsive(root):
         sh = root.winfo_screenheight()
     except Exception:
         sw, sh = 1366, 768
+    _load_manual_ui_scale()
     metrics = compute_responsive_metrics(sw, sh)
     mode = metrics["mode"]
     sidebar_w = metrics["sidebar_w"]
@@ -117,7 +149,7 @@ def get_responsive_metrics(root=None):
 
 
 def font(size_delta: int = 0, weight: str = "normal", family: str = "Arial"):
-    sz = max(8, font_sz + size_delta)
+    sz = max(8, _apply_manual_scale(font_sz + size_delta))
     if weight == "normal":
         return (family, sz)
     return (family, sz, weight)
@@ -128,10 +160,10 @@ def scaled_value(large: int, medium: int | None = None, compact: int | None = No
     compact = compact if compact is not None else medium
     current_mode = mode
     if current_mode == "large":
-        return large
+        return _apply_manual_scale(large)
     if current_mode == "compact":
-        return compact
-    return medium
+        return _apply_manual_scale(compact)
+    return _apply_manual_scale(medium)
 
 
 def scale_for_dpi(base_value: int, root=None) -> int:
@@ -197,31 +229,215 @@ def fit_toplevel(win, width: int, height: int, *,
     return width, height
 
 
+_ACTIVE_SCROLL_CANVAS = None
+_MOUSEWHEEL_GLOBAL_BOUND = False
+_SCROLL_CANVASES = []
+
+
+def _wheel_scroll_units(delta) -> int:
+    """Normalize classic mouse wheels and precision touchpads to Tk scroll units."""
+    try:
+        delta = float(delta)
+    except Exception:
+        return 0
+    if delta == 0:
+        return 0
+    magnitude = max(1, int(abs(delta) / 120))
+    return -magnitude if delta > 0 else magnitude
+
+
+def _is_dropdown_wheel_target(widget) -> bool:
+    """Return True when wheel belongs to a dropdown/list control, not the page."""
+    try:
+        cls = str(widget.winfo_class())
+    except Exception:
+        cls = ""
+    try:
+        path = str(widget)
+    except Exception:
+        path = ""
+    if cls in {"TCombobox", "Combobox"}:
+        return True
+    if "combobox" in path.lower() and "popdown" in path.lower():
+        return True
+    return cls == "Listbox" and "popdown" in path.lower()
+
+
 def _bind_mousewheel(canvas, widget):
-    """Phase 3 FIX: cross-platform mousewheel binding."""
-    def _on_mousewheel(event):
+    """Cross-platform mousewheel binding that also works over child inputs."""
+    global _MOUSEWHEEL_GLOBAL_BOUND
+    if canvas not in _SCROLL_CANVASES:
+        _SCROLL_CANVASES.append(canvas)
+
+    def _activate(_event=None):
+        global _ACTIVE_SCROLL_CANVAS
+        _ACTIVE_SCROLL_CANVAS = canvas
+
+    def _deactivate(_event=None):
+        global _ACTIVE_SCROLL_CANVAS
+        if _ACTIVE_SCROLL_CANVAS is canvas:
+            _ACTIVE_SCROLL_CANVAS = None
+
+    def _target_canvas(event=None, fallback=False):
         try:
-            if hasattr(event, "delta"):
-                delta = event.delta
-                if delta == 0:
-                    return
-                canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+            x = event.x_root if event is not None else None
+            y = event.y_root if event is not None else None
+            if x is not None and y is not None:
+                for candidate in reversed(_SCROLL_CANVASES):
+                    if not candidate.winfo_exists():
+                        continue
+                    cx = candidate.winfo_rootx()
+                    cy = candidate.winfo_rooty()
+                    cw = candidate.winfo_width()
+                    ch = candidate.winfo_height()
+                    if cx <= x <= cx + cw and cy <= y <= cy + ch:
+                        return candidate
         except Exception:
             pass
+        return _ACTIVE_SCROLL_CANVAS or (canvas if fallback else None)
+
+    def _on_mousewheel(event):
+        try:
+            if _is_dropdown_wheel_target(getattr(event, "widget", None)):
+                return "break"
+            target = _target_canvas(event, fallback=True)
+            if target is None:
+                return None
+            if hasattr(event, "delta"):
+                units = _wheel_scroll_units(event.delta)
+                if units == 0:
+                    return None
+                target.yview_scroll(units, "units")
+                return "break"
+        except Exception:
+            pass
+        return None
 
     def _on_shift_mousewheel(event):
         try:
+            if _is_dropdown_wheel_target(getattr(event, "widget", None)):
+                return "break"
+            target = _target_canvas(event, fallback=True)
+            if target is None:
+                return None
             if hasattr(event, "delta"):
-                delta = event.delta
-                if delta == 0:
-                    return
-                canvas.xview_scroll(int(-1 * (delta / 120)), "units")
+                units = _wheel_scroll_units(event.delta)
+                if units == 0:
+                    return None
+                target.xview_scroll(units, "units")
+                return "break"
+        except Exception:
+            pass
+        return None
+
+    def _on_button4(event):
+        try:
+            if _is_dropdown_wheel_target(getattr(event, "widget", None)):
+                return "break"
+            target = _target_canvas(event, fallback=True)
+            if target is not None:
+                target.yview_scroll(-1, "units")
+                return "break"
+        except Exception:
+            pass
+        return None
+
+    def _on_button5(event):
+        try:
+            if _is_dropdown_wheel_target(getattr(event, "widget", None)):
+                return "break"
+            target = _target_canvas(event, fallback=True)
+            if target is not None:
+                target.yview_scroll(1, "units")
+                return "break"
+        except Exception:
+            pass
+        return None
+
+    def _bind_tree(target):
+        try:
+            if not getattr(target, "_blite_scroll_bound", False):
+                target._blite_scroll_bound = True
+                target.bind("<Enter>", _activate, add="+")
+                target.bind("<Leave>", _deactivate, add="+")
+                target.bind("<MouseWheel>", _on_mousewheel, add="+")
+                target.bind("<Shift-MouseWheel>", _on_shift_mousewheel, add="+")
+                target.bind("<Button-4>", _on_button4, add="+")
+                target.bind("<Button-5>", _on_button5, add="+")
+                target.bind("<Configure>", lambda _e: _bind_tree(target), add="+")
+        except Exception:
+            pass
+        try:
+            for child in target.winfo_children():
+                _bind_tree(child)
         except Exception:
             pass
 
     for target in (canvas, widget):
-        target.bind("<MouseWheel>", _on_mousewheel, add="+")
-        target.bind("<Shift-MouseWheel>", _on_shift_mousewheel, add="+")
+        _bind_tree(target)
+
+    if not _MOUSEWHEEL_GLOBAL_BOUND:
+        root = canvas.winfo_toplevel()
+
+        def _on_global_mousewheel(event):
+            try:
+                if _is_dropdown_wheel_target(getattr(event, "widget", None)):
+                    return "break"
+                active = _target_canvas(event)
+                if active is None:
+                    return
+                if hasattr(event, "delta"):
+                    units = _wheel_scroll_units(event.delta)
+                    if units == 0:
+                        return
+                    active.yview_scroll(units, "units")
+                    return "break"
+            except Exception:
+                pass
+
+        def _on_global_shift_mousewheel(event):
+            try:
+                if _is_dropdown_wheel_target(getattr(event, "widget", None)):
+                    return "break"
+                active = _target_canvas(event)
+                if active is None:
+                    return
+                if hasattr(event, "delta"):
+                    units = _wheel_scroll_units(event.delta)
+                    if units == 0:
+                        return
+                    active.xview_scroll(units, "units")
+                    return "break"
+            except Exception:
+                pass
+
+        def _on_global_button4(event):
+            try:
+                if _is_dropdown_wheel_target(getattr(event, "widget", None)):
+                    return "break"
+                active = _target_canvas(event)
+                if active is not None:
+                    active.yview_scroll(-1, "units")
+                    return "break"
+            except Exception:
+                pass
+
+        def _on_global_button5(event):
+            try:
+                if _is_dropdown_wheel_target(getattr(event, "widget", None)):
+                    return "break"
+                active = _target_canvas(event)
+                if active is not None:
+                    active.yview_scroll(1, "units")
+                    return "break"
+            except Exception:
+                pass
+
+        root.bind_all("<MouseWheel>", _on_global_mousewheel, add="+")
+        root.bind_all("<Shift-MouseWheel>", _on_global_shift_mousewheel, add="+")
+        root.bind_all("<Button-4>", _on_global_button4, add="+")
+        root.bind_all("<Button-5>", _on_global_button5, add="+")
+        _MOUSEWHEEL_GLOBAL_BOUND = True
 
 
 def make_scrollable(parent, *, bg: str = None, padx: int = 0, pady: int = 0,
@@ -272,3 +488,23 @@ def make_toplevel_scrollable(win, *, bg: str = None, padx: int = 0, pady: int = 
     win.grid_rowconfigure(0, weight=1)
     win.grid_columnconfigure(0, weight=1)
     return make_scrollable(win, bg=bg, padx=padx, pady=pady, horizontal=horizontal)
+
+
+def make_toplevel_scrollable_with_footer(win, *, bg: str = None, padx: int = 0, pady: int = 0,
+                                         footer_bg: str = None, footer_padx: int = 14,
+                                         footer_pady: int = 10, horizontal: bool = False):
+    """
+    Toplevel layout for production forms:
+    - scrollable content body
+    - fixed bottom action bar that remains visible while the body scrolls
+
+    Returns: (body, footer, canvas, container)
+    """
+    bg = bg or win.cget("bg")
+    footer_bg = footer_bg or bg
+    footer = tk.Frame(win, bg=footer_bg, padx=footer_padx, pady=footer_pady)
+    footer.pack(side=tk.BOTTOM, fill=tk.X)
+    body, canvas, container = make_scrollable(
+        win, bg=bg, padx=padx, pady=pady, horizontal=horizontal
+    )
+    return body, footer, canvas, container
